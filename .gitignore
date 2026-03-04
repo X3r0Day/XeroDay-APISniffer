@@ -1,0 +1,12 @@
+# Runtime data
+recent_repos.json
+leaked_keys.json
+failed_repos.json
+clean_repos.json
+live_proxies.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
