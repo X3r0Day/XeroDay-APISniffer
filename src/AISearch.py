@@ -62,7 +62,9 @@ AVAILABLE_CATEGORIES =[
     "Discord Bot Token", "Discord Webhook", "Slack Bot Token", "Slack User Token", 
     "Slack Webhook", "Telegram Bot Token", "Twilio API Key", "SendGrid API Key", 
     "Mailgun API Key", "Stripe Secret Key", "Square Access Token", "Square OAuth Secret", 
-    "Shopify Access Token", "Shopify Custom App"
+    "Shopify Access Token", "Shopify Custom App", "Supabase PAT", "Supabase Anon/Service Role JWT",
+    "Firebase Server Key", "Firebase Database URL", "PlanetScale Password", "PlanetScale OAuth Token",
+    "Airtable PAT", "Appwrite API Key", "Deta Token", "PocketBase Token"
 ]
 
 console = Console()
@@ -95,13 +97,13 @@ AVAILABLE EXACT CATEGORIES:
 {json.dumps(AVAILABLE_CATEGORIES)}
 
 INSTRUCTIONS:
-1. Analyze what the user is asking for (e.g., "AWS", "discord", "all AI keys").
+1. Analyze what the user is asking for (e.g., "AWS", "discord", "all AI keys", "all Database").
 2. Match their intent to the AVAILABLE EXACT CATEGORIES. 
-3. If they ask for something broad like "AI keys", include OpenAI, Anthropic, Groq, xAI, etc.
+3. If they ask for something broad like "AI keys", include OpenAI, Anthropic, Groq, xAI, Google etc.
 4. DO NOT make up categories. If they ask for something not in the list, leave the array empty.
 5. You MUST return your answer in the following JSON format ONLY:
 {{
-    "understanding": "A short 1-sentence confirmation of what you are querying.",
+    "understanding": "A short 1-sentence confirmation of what you are querying. If users says hello or talks to you, you can talk back!",
     "target_categories":["Exact Category 1", "Exact Category 2"]
 }}"""
 

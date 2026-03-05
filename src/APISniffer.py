@@ -35,6 +35,15 @@
 # ---------------------------------------------------------------------------------- #
 
 
+#--------------------------------------#
+#     Error Codes and its meanings     #
+# -------------------------------------#
+#   422 = No more results after that   #
+#   200 = OKAY/GOOD                    #
+#   403 = Access Denied                #
+#   404 = Not Found                    #
+# ------------------------------------ #
+
 
 
 
@@ -42,20 +51,28 @@ import json
 import os
 import random
 import time
-from datetime import datetime, timedelta, timezone
+import sys
+import requests
 from typing import List, Optional
 
-import requests
+from datetime import (
+    datetime,
+    timedelta,
+    timezone
+)
 
 
-LOOKBACK_MINS = 100 # Last 100 mins, this is enough for 1k results [my observations marked its more than enough, and github is not flooded with repo every minute]
+
+LOOKBACK_MINS = 4     # 20 mins for now is enough unless you need bigger dataset
+CHUNK_MINS = 1        # Time-slice per chunk
 TARGET_QUEUE_FILE = "recent_repos.json"
 PROXY_FILE = "live_proxies.txt"
 RESULTS_PER_PAGE = 100
-PAGES_TO_SCRAPE = 10  # gh provides 100 results per page
+PAGES_TO_SCRAPE = 10  # GH only allows 1k
 NET_TIMEOUT = 10
 PROXY_RETRY_LIMIT = 200
 
+MAX_SPLIT_DEPTH = 10
 
 SCANNED_HISTORY = ["clean_repos.json", "failed_repos.json", "leaked_keys.json"]
 
@@ -70,12 +87,12 @@ def grab_proxies(filepath: str = PROXY_FILE) -> List[str]:
         return []
 
 
-def get_search_query(minutes: int = LOOKBACK_MINS, page: int = 1) -> dict:
-    timestamp = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+def get_search_query(datetime, end_time: datetime, page: int = 1) -> dict:
+    start_str = datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_str = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
     return {
-        "q": f"created:>{timestamp}",
+        "q": f"created:{start_str}..{end_str}",
         "sort": "created",
         "order": "desc",
         "per_page": RESULTS_PER_PAGE,
@@ -87,7 +104,9 @@ def format_proxy_dict(ip_port: str) -> dict:
     return {"http": f"http://{ip_port}", "https": f"http://{ip_port}"}
 
 
-def robust_request(
+
+
+def make_request(
     session_obj: requests.Session, endpoint: str, query: dict, ips: List[str]
 ) -> requests.Response:
     browser_headers = {"User-Agent": SPOOFED_UA}
@@ -197,47 +216,130 @@ def sync_results_to_disk(raw_json: dict, filename: str = TARGET_QUEUE_FILE):
     return new_finds
 
 
+
+
+
 def main():
     api_url = "https://api.github.com/search/repositories"
     proxies = grab_proxies()
 
-    print(f"[*] Scouring GitHub for repos from the last {LOOKBACK_MINS} minutes...")
+    print(f"[*] Scouring GitHub for repos from the last {LOOKBACK_MINS} minutes "
+          f"(using {CHUNK_MINS}-min chunks with adaptive bisection)...")
+    if proxies:
+        print(f"[*] Loaded {len(proxies)} proxies as fallback.")
+    else:
+        print("[*] No proxies loaded. Using direct connection only.")
 
     http_session = requests.Session()
     total_new_finds = 0
 
     try:
-        for current_page in range(1, PAGES_TO_SCRAPE + 1):
-            search_params = get_search_query(page=current_page)
-            print(f"[*] Fetching Page {current_page}...")
+        now = datetime.now(timezone.utc)
+        newest = now - timedelta(minutes=LOOKBACK_MINS)
 
-            api_response = robust_request(http_session, api_url, search_params, proxies)
+        chunks = []
+        cursor = newest
+        while cursor < now:
+            chunk_end = min(cursor + timedelta(minutes=CHUNK_MINS), now)
+            chunks.append((cursor, chunk_end))
+            cursor = chunk_end
 
-            if api_response.status_code != 200:
-                print(f"[-] Attempt failed with status: {api_response.status_code}")
-                try:
-                    print(api_response.json())
-                except Exception:
-                    pass
-                break
+        # We process newest first, so reverse to use as a queue/stack
+        chunks.reverse()
 
-            response_data = api_response.json()
+        print(f"[*] Planning to scan {len(chunks)} chunks")
+        print(f"[*] Time range: {newest.strftime('%H:%M:%S')} → {now.strftime('%H:%M:%S')} UTC\n")
 
-            if not response_data.get("items"):
-                print("[-] No more repositories found.")
-                break
+        chunk_idx = 0
+        while chunks:
+            start_time, end_time = chunks.pop(0)
+            chunk_idx += 1
+            
+            t_start = start_time.strftime('%H:%M:%S')
+            t_end = end_time.strftime('%H:%M:%S')
 
-            finds_on_page = sync_results_to_disk(response_data)
-            total_new_finds += finds_on_page
+            print(f"{'='*60}")
+            print(f"[Chunk {chunk_idx}] {t_start} -> {t_end} UTC")
 
-            time.sleep(2)
+            api_query = get_search_query(start_time, end_time, page=1)
+            req = make_request(http_session, api_url, api_query, proxies)
+
+            if req.status_code == 422:
+                print("  [-] Target chunk rejected (422). Moving on.")
+                continue
+            elif req.status_code != 200:
+                print(f"  [-] Request failed with status {req.status_code}")
+                continue
+
+            raw_json = req.json()
+            repo_count = raw_json.get("total_count", 0)
+            found_repos = raw_json.get("items", [])
+
+            if not found_repos:
+                print("  [-] Ghost town. No repos born in this chunk.")
+                continue
+
+            print(f"  [i] Sniffer shows {repo_count} newborn repos here")
+
+            # 1k hard cap 
+            if repo_count >= 1000:
+                mid_point = start_time + (end_time - start_time) / 2
+                # Don't split if it's less than a second wide, that's just silly
+                if (mid_point - start_time).total_seconds() < 1:
+                    print("  [!] Chunk can't be split further. Grabbing what we fetched...")
+                else:
+                    print(f"  [↓] The {repo_count} hits the 1k cap! Slicing chunk in half...")
+                    # Insert the two halves (newer half first)
+                    chunks.insert(0, (start_time, mid_point))
+                    chunks.insert(0, (mid_point, end_time))
+                    chunk_idx -= 1
+                    continue
+
+            pages_needed = min((repo_count + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE, PAGES_TO_SCRAPE)
+
+            saved_this_chunk = sync_results_to_disk(raw_json)
+            total_new_finds += saved_this_chunk
+            print(f"  -> Siphoned Page 1/{pages_needed}: +{saved_this_chunk} fresh targets")
+
+            if len(found_repos) < RESULTS_PER_PAGE:
+                continue
+
+            for page_num in range(2, pages_needed + 1):
+                time.sleep(2)
+
+                api_query = get_search_query(start_time, end_time, page=page_num)
+                print(f"  -> Fetching Page {page_num}/{pages_needed}...")
+
+                req = make_request(http_session, api_url, api_query, proxies)
+
+                if req.status_code == 422:
+                    print("  [-] Reached max pagination limit. Bailing out.")
+                    break
+                elif req.status_code != 200:
+                    print(f"  [-] Page {page_num} died with status {req.status_code}.")
+                    break
+
+                page_json = req.json()
+                current_items = page_json.get("items", [])
+
+                if not current_items:
+                    print("  [-] Empty page, breaking out.")
+                    break
+
+                loot = sync_results_to_disk(page_json)
+                total_new_finds += loot
+                print(f"     +{loot} fresh targets")
+
+                if len(current_items) < RESULTS_PER_PAGE:
+                    break
 
     finally:
         http_session.close()
 
-    print(
-        f"\n[+] Done! Successfully added {total_new_finds} total new targets to the queue."
-    )
+    print(f"\n{'='*60}")
+    print(f"[+] Done! Successfully added {total_new_finds} total new targets to the queue.")
+
+
 
 
 if __name__ == "__main__":
