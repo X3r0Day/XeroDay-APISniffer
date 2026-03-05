@@ -123,6 +123,16 @@ API_SIGNATURES = {
     "Square OAuth Secret": re.compile(r"\bsq0csp-[0-9A-Za-z\-_]{43}\b"),
     "Shopify Access Token": re.compile(r"\bshpat_[a-fA-F0-9]{32}\b"),
     "Shopify Custom App": re.compile(r"\bshpca_[a-fA-F0-9]{32}\b"),
+    "Supabase PAT": re.compile(r"\bsbp_[a-zA-Z0-9]{40}\b"),
+    "Supabase Anon/Service Role JWT": re.compile(r"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+"),
+    "Firebase Server Key": re.compile(r"\bAAAA[A-Za-z0-9_-]{7}:[A-Za-z0-9_-]{140}\b"),
+    "Firebase Database URL": re.compile(r"https:\/\/[a-z0-9-]+\.firebaseio\.com"),
+    "PlanetScale Password": re.compile(r"\bpscale_pw_[a-zA-Z0-9_\.\-]{43}\b"),
+    "PlanetScale OAuth Token": re.compile(r"\bpscale_oauth_[a-zA-Z0-9_\.\-]{32,64}\b"),
+    "Airtable PAT": re.compile(r"\bpat[a-zA-Z0-9]{14}\.[a-zA-Z0-9]{64}\b"),
+    "Appwrite API Key": re.compile(r"(?i)appwrite[\w\s=-]{0,20}(?:key|token|secret)[\w\s=:\"\'-]{0,10}\b([a-zA-Z0-9\-_]{32,})\b"),
+    "Deta Token": re.compile(r"(?i)deta[\w\s=-]{0,20}(?:key|token)[\w\s=:\"\'-]{0,10}\b([a-zA-Z0-9_]{32,})\b"),
+    "PocketBase Token": re.compile(r"(?i)pocketbase[\w\s=-]{0,20}(?:key|token|admin)[\w\s=:\"\'-]{0,10}\b([a-zA-Z0-9\-_]{32,})\b"),
 }
 
 console = Console()
@@ -133,6 +143,11 @@ pause_event = threading.Event()
 pause_event.set() 
 exit_prog = False
 active_proxies =[]
+
+# To check if new target should be injected
+is_typing_url = False
+input_buffer = ""
+new_manual_targets = []
 
 available_thread_tags = deque([f"Thread-{i+1}" for i in range(MAX_THREADS)])
 tag_mutex = threading.Lock()
@@ -165,6 +180,7 @@ def toggle_pause():
         pause_event.set()
 
 def keyboard_monitor():
+    global is_typing_url, input_buffer
     try:
         import msvcrt
         is_windows = True
@@ -177,9 +193,27 @@ def keyboard_monitor():
         while not exit_prog:
             if msvcrt.kbhit():
                 char = msvcrt.getch()
-                if char in[b' ', b' ']:
-                    toggle_pause()
-                    time.sleep(0.3) 
+                if is_typing_url:
+                    if char in[b'\r', b'\n']:
+                        handle_new_url(input_buffer)
+                        is_typing_url = False
+                        input_buffer = ""
+                    elif char == b'\x08': # Backspace
+                        input_buffer = input_buffer[:-1]
+                    elif char == b'\x1b': # Esc
+                        is_typing_url = False
+                        input_buffer = ""
+                    else:
+                        try:
+                            input_buffer += char.decode('utf-8')
+                        except Exception: pass
+                else:
+                    if char in [b' ', b' ']:
+                        toggle_pause()
+                        time.sleep(0.3) 
+                    elif char.lower() == b'i':
+                        is_typing_url = True
+                        input_buffer = ""
             time.sleep(0.1)
     else:
         import select, tty, termios
@@ -191,9 +225,25 @@ def keyboard_monitor():
             while not exit_prog:
                 if select.select([sys.stdin],[],[], 0.1)[0]:
                     char = sys.stdin.read(1)
-                    if char == ' ':
-                        toggle_pause()
-                        time.sleep(0.3) 
+                    if is_typing_url:
+                        if char in ['\n', '\r']:
+                            handle_new_url(input_buffer)
+                            is_typing_url = False
+                            input_buffer = ""
+                        elif char in ['\x7f', '\b']: # Backspace
+                            input_buffer = input_buffer[:-1]
+                        elif char == '\x1b': # Esc
+                            is_typing_url = False
+                            input_buffer = ""
+                        else:
+                            input_buffer += char
+                    else:
+                        if char == ' ':
+                            toggle_pause()
+                            time.sleep(0.3) 
+                        elif char.lower() == 'i':
+                            is_typing_url = True
+                            input_buffer = ""
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
@@ -238,6 +288,36 @@ def dump_json_safely(filepath: str, json_blob: dict):
         disk_content.append(json_blob)
         with open(filepath, "w", encoding="utf-8") as file_ptr:
             json.dump(disk_content, file_ptr, indent=4)
+
+def handle_new_url(url_text: str):
+    global new_manual_targets, scoreboard
+    url_text = url_text.strip()
+    if not url_text: return
+    match = re.search(r'(?:github\.com/)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)', url_text)
+    if match:
+        repo_name = match.group(1)
+        if repo_name.endswith('.git'): repo_name = repo_name[:-4]
+        repo_data = {"name": repo_name, "url": f"https://github.com/{repo_name}"}
+        
+        with io_mutex:
+            current_queue =[]
+            if os.path.exists(QUEUE_JSON):
+                try:
+                    with open(QUEUE_JSON, "r", encoding="utf-8") as f:
+                        current_queue = json.load(f)
+                except Exception: pass
+            
+            if not any(r.get("name") == repo_name for r in current_queue):
+                current_queue.append(repo_data)
+                with open(QUEUE_JSON, "w", encoding="utf-8") as f:
+                    json.dump(current_queue, f, indent=4)
+                    
+        new_manual_targets.append(repo_data)
+        bump_score("total", 1)
+        bump_score("remaining", 1)
+        log_msg(f"[bold green][+] Inserted manual target:[/] {repo_name}")
+    else:
+        log_msg(f"[bold red][!] Invalid URL/Repo format for manual insert.[/]")
 
 def remove_from_queue(target_repo: str):
     with io_mutex:
@@ -360,7 +440,7 @@ def regex_grep_text(raw_text: str, filename: str) -> List[dict]:
     caught_keys =[]
     for line_idx, line_data in enumerate(raw_text.splitlines(), 1):
         if len(line_data) > LINE_CUTOFF:
-            split_pieces = [line_data[i:i+LINE_CUTOFF] for i in range(0, len(line_data), LINE_CUTOFF)]
+            split_pieces =[line_data[i:i+LINE_CUTOFF] for i in range(0, len(line_data), LINE_CUTOFF)]
         else:
             split_pieces = [line_data]
             
@@ -500,6 +580,7 @@ def dissect_repo_memory(repo_data: dict, thread_tag: str) -> dict:
 
 def paint_dashboard() -> Layout:
     with ui_mutex:
+        global is_typing_url, input_buffer
         state_tag = "[bold green]▶ RUNNING[/]" if pause_event.is_set() else "[bold blink red]⏸ PAUSED (Press SPACE to Resume)[/]"
         top_bar_text = (
             f"{state_tag}  |  "
@@ -551,8 +632,18 @@ def paint_dashboard() -> Layout:
             Layout(name="bottom_section")
         )
         
+        input_prompt = "[yellow]Type URL and press Enter (Esc to cancel):[/] " if is_typing_url else "[dim]Press 'i' to manually insert a GitHub repo URL[/]"
+        display_text = input_prompt + ("[bold white]" + input_buffer + "[/]" if is_typing_url else "")
+        input_panel = Panel(display_text, title="[bold green]Manual Target Insertion[/]", border_style="green")
+
+        left_layout = Layout(ratio=5)
+        left_layout.split_column(
+            Layout(Panel(thread_grid, title="[bold cyan]Active Thread Dashboard[/]", border_style="cyan")),
+            Layout(input_panel, size=3)
+        )
+        
         screen_layout["bottom_section"].split_row(
-            Layout(Panel(thread_grid, title="[bold cyan]Active Thread Dashboard[/]", border_style="cyan"), ratio=5),
+            left_layout,
             Layout(name="logs_section", ratio=3)
         )
         
@@ -583,7 +674,7 @@ def thread_runner(repo_data: dict):
                 available_thread_tags.append(thread_tag)
 
 def main():
-    global exit_prog, active_proxies
+    global exit_prog, active_proxies, new_manual_targets
     
     if not SCAN_HEROKU_KEYS and "Heroku API Key" in API_SIGNATURES:
         del API_SIGNATURES["Heroku API Key"]
@@ -613,21 +704,26 @@ def main():
                 for target in queued_targets:
                     pending_tasks.add(thread_pool.submit(thread_runner, target))
                 
-                while pending_tasks:
-                    done_tasks, pending_tasks = wait(pending_tasks, timeout=0.25, return_when=FIRST_COMPLETED)
-                    
-                    for finished_task in done_tasks:
-                        try:
-                            task_outcome = finished_task.result()
-                            if task_outcome["status"] == "leaked": dump_json_safely(LEAKS_JSON, task_outcome)
-                            elif task_outcome["status"] == "failed": dump_json_safely(DEAD_TARGETS_JSON, task_outcome)
-                            elif task_outcome["status"] == "clean": dump_json_safely(BORING_REPOS_JSON, task_outcome)
-                                
-                            remove_from_queue(task_outcome.get("repo"))
-                            bump_score("remaining", -1)
-                        except Exception: pass
-                    
-                    live_screen.update(paint_dashboard())
+                while pending_tasks or new_manual_targets:
+                    while new_manual_targets:
+                        new_t = new_manual_targets.pop(0)
+                        pending_tasks.add(thread_pool.submit(thread_runner, new_t))
+                        
+                    if pending_tasks:
+                        done_tasks, pending_tasks = wait(pending_tasks, timeout=0.25, return_when=FIRST_COMPLETED)
+                        
+                        for finished_task in done_tasks:
+                            try:
+                                task_outcome = finished_task.result()
+                                if task_outcome["status"] == "leaked": dump_json_safely(LEAKS_JSON, task_outcome)
+                                elif task_outcome["status"] == "failed": dump_json_safely(DEAD_TARGETS_JSON, task_outcome)
+                                elif task_outcome["status"] == "clean": dump_json_safely(BORING_REPOS_JSON, task_outcome)
+                                    
+                                remove_from_queue(task_outcome.get("repo"))
+                                bump_score("remaining", -1)
+                            except Exception: pass
+                        
+                        live_screen.update(paint_dashboard())
 
         console.print("\n[bold green]Queue Exhausted. Scan Complete.[/]")
         
