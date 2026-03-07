@@ -2,7 +2,7 @@
 
 API Sniffer is a GitHub-focused secret discovery toolkit for scanning public repositories and identifying exposed API keys, tokens, webhooks, and other sensitive credentials. It is part of the X3r0Day Framework and is built for security research, defensive analysis, and responsible disclosure.
 
-The project is organized around discovery, scanning, and querying, with an AI-first launcher, a workflow orchestrator, shared routing and search utilities, scanner dashboard helpers, repo-target extraction helpers, and a small test suite for scanner behavior.
+The project is organized around discovery, scanning, and querying, with an AI-first launcher, a workflow orchestrator, shared routing and search utilities, scanner dashboard helpers, repo-target extraction helpers.
 
 ---
 
@@ -47,7 +47,7 @@ main.py
 
 ```text
 API Sniffer/
-├── main.py                         # Unified launcher / control center entry point
+├── main.py                         # Control center entry point
 ├── src/
 │   ├── APISniffer.py               # Stage 1: GitHub repository discovery
 │   ├── APIScanner.py               # Stage 2: Repository scanning and secret detection
@@ -58,14 +58,11 @@ API Sniffer/
 │       ├── ai_search_runtime.py    # Shared AI query runtime used by AISearch and AIWorkflow
 │       ├── api_signatures.py       # Secret signature definitions
 │       ├── category_routing.py     # Query/category inference helpers
-│       ├── scanner_dashboard.py    # Rich dashboard rendering for the scanner
+│       ├── scanner_dashboard.py    # Dashboard rendering for the scanner
 │       ├── scanner_matcher.py      # Regex matching and finding extraction
 │       └── scanner_targets.py      # Repo target extraction from prompts/URLs
-├── tests/
-│   ├── test_scanner_branches.py    # Default-branch resolution coverage
-│   └── test_scanner_targets.py     # Repo target parsing coverage
 ├── requirements.txt
-├── live_proxies.txt                # Optional proxy list provided by the user
+├── live_proxies.txt                # Optional proxy list to bypass rate limits
 └── README.md
 ```
 
@@ -109,16 +106,16 @@ python main.py
 
 This opens the launcher. From there:
 
-- Press `Enter` to open the AI workflow directly
 - Type `help` to see how the workflow works
 - Type `Manual` to open the numbered control center
+- Press `Enter` to open the AI workflow directly
 
 Example requests:
 
 - `show all the API keys`
 - `find any Discord tokens`
 - `start scanning`
-- `run discovery for 3 minutes, then scan`
+- `run discovery for last 3 minutes, then scan`
 
 ### Stage 1: Discover Repositories
 
@@ -139,8 +136,8 @@ This reads from `recent_repos.json`, resolves the repository's default branch wh
 The scanner opens a full-screen terminal dashboard.
 
 - Press `Space` to pause or resume
-- Press `i` to insert GitHub repo targets while the scanner is running
-- Repo insertion accepts GitHub URLs or `owner/repo` targets and pushes them into the live queue
+- Press `i` to insert to ask AI to insert GitHub repo targets while the scanner is running
+- Repo insertion accepts GitHub URLs or `owner/repo` targets and pushes them into the live queue or just AI query
 
 ### Stage 3: Query the Database
 
