@@ -85,6 +85,8 @@ NET_TIMEOUTS = (5.0, 15.0)
 # This is for idle timeout and kills the connection if >15 seconds
 IDLE_STALL_TIMEOUT_SEC = 15.0 
 MAX_DOWNLOAD_SIZE_BYTES = 20 * 1024 * 1024  
+PROXY_TIMEOUTS = (15.0, 20.0)
+PREFER_PROXY = False
 
 TARGET_EXTENSIONS = (
     ".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".yml", ".yaml", ".xml", 
@@ -110,6 +112,11 @@ tag_mutex = threading.Lock()
 pause_event = None
 exit_prog = False
 active_proxies = []
+good_proxies = set()
+good_proxy_lock = threading.Lock()
+proxy_fail = {}
+proxy_lock = threading.Lock()
+PROXY_FAIL_LIMIT = 1
 
 # To check if new target should be injected
 is_typing_url = False
@@ -137,11 +144,12 @@ def parse_args():
     parser.add_argument("--history-depth", type=int, help="Number of recent commits to scan.")
     parser.add_argument("--scan-heroku-keys", action="store_true", help="Enable Heroku key pattern scanning.")
     parser.add_argument("--no-commit-history", action="store_true", help="Disable commit history scanning.")
+    parser.add_argument("--prefer-proxy", action="store_true", help="Try proxy download before direct IP.")
     return parser.parse_args()
 
 
 def apply_runtime_overrides(args) -> None:
-    global MAX_THREADS, MAX_HISTORY_DEPTH, SCAN_HEROKU_KEYS, SCAN_COMMIT_HISTORY
+    global MAX_THREADS, MAX_HISTORY_DEPTH, SCAN_HEROKU_KEYS, SCAN_COMMIT_HISTORY, PREFER_PROXY
 
     if args.max_threads is not None:
         MAX_THREADS = max(1, args.max_threads)
@@ -151,6 +159,8 @@ def apply_runtime_overrides(args) -> None:
         SCAN_HEROKU_KEYS = True
     if args.no_commit_history:
         SCAN_COMMIT_HISTORY = False
+    if args.prefer_proxy:
+        PREFER_PROXY = True
 
 
 def reset_runtime_state() -> None:
@@ -246,6 +256,68 @@ def read_proxies(filepath: str = PROXY_LIST_TXT) -> List[str]:
     except FileNotFoundError:
         return[]
 
+def set_active_proxies(proxy_list: List[str]) -> None:
+    with proxy_lock:
+        active_proxies.clear()
+        active_proxies.extend(proxy_list)
+
+def get_active_proxies() -> List[str]:
+    with proxy_lock:
+        return list(active_proxies)
+
+def write_proxy_file(lines: List[str]) -> None:
+    try:
+        with open(PROXY_LIST_TXT, "w", encoding="utf-8") as f:
+            for line in lines:
+                f.write(f"{line}\n")
+    except Exception:
+        console.print(f"[bold red][X] Failed to update {PROXY_LIST_TXT}[/]")
+
+def mark_proxy_ok(proxy_ip: str) -> None:
+    # We keep the original string so it writes back exactly as the user provided.
+    # Example: "http://1.2.3.4:8080" stays that way in live_proxies.txt.
+    if not proxy_ip:
+        return
+    with good_proxy_lock:
+        good_proxies.add(proxy_ip.strip())
+    with proxy_lock:
+        proxy_fail.pop(proxy_ip.strip(), None)
+
+def mark_proxy_bad(proxy_ip: str, reason: bytes) -> None:
+    # We only drop it after N fails so one bad hop doesn't nuke the list.
+    p = proxy_ip.strip()
+    with proxy_lock:
+        cnt = proxy_fail.get(p, 0) + 1
+        proxy_fail[p] = cnt
+        if cnt < PROXY_FAIL_LIMIT:
+            return
+        if p in active_proxies:
+            active_proxies.remove(p)
+        proxy_fail.pop(p, None)
+    with good_proxy_lock:
+        good_proxies.discard(p)
+    write_proxy_file(get_active_proxies())
+
+def save_good_proxies() -> None:
+    if not active_proxies:
+        return
+    with good_proxy_lock:
+        kept = sorted(good_proxies)
+    try:
+        write_proxy_file(kept)
+        if kept:
+            console.print(f"[bold green][+] Saved {len(kept)} working proxies to {PROXY_LIST_TXT}[/]")
+        else:
+            console.print(f"[bold yellow][!] No working proxies found. {PROXY_LIST_TXT} cleared.[/]")
+    except Exception:
+        console.print(f"[bold red][X] Failed to update {PROXY_LIST_TXT}[/]")
+
+def fmt_proxy(p: str) -> dict:
+    base = p.strip()
+    if "://" not in base:
+        base = f"http://{base}"
+    return {"http": base, "https": base}
+
 def toggle_pause():
     global active_proxies
     if pause_event.is_set():
@@ -256,8 +328,8 @@ def toggle_pause():
                 if state["target"] != "Idle":
                     state["action"] = "[bold red]⏸ PAUSED[/]"
     else:
-        active_proxies = read_proxies()
-        log_msg(f"[bold green][▶] RESUMED: Reloaded {len(active_proxies)} proxies and unfreezing threads.[/]")
+        set_active_proxies(read_proxies())
+        log_msg(f"[bold green][▶] RESUMED: Reloaded {len(get_active_proxies())} proxies and unfreezing threads.[/]")
         pause_event.set()
 
 def keyboard_monitor():
@@ -495,17 +567,32 @@ def remove_from_queue(target_repo: str):
             write_json_snapshot(fresh_queue, QUEUE_JSON)
         except Exception: pass
 
-def fetch_with_progress(url: str, headers: dict, proxy_dict: Optional[dict], thread_tag: str, ip_str: str, action_label: str) -> bytes:
+def fetch_with_progress(
+    url: str,
+    headers: dict,
+    proxy_dict: Optional[dict],
+    thread_tag: str,
+    ip_str: str,
+    action_label: str,
+    tmo: Tuple[float, float] = NET_TIMEOUTS,
+) -> bytes:
     raise_if_exit_requested()
     last_chunk_time = time.time()
     total_bytes = 0
     last_ui_update = 0
     
     try:
-        with requests.get(url, headers=headers, proxies=proxy_dict, timeout=NET_TIMEOUTS, stream=True) as r:
+        with requests.get(url, headers=headers, proxies=proxy_dict, timeout=tmo, stream=True) as r:
             if r.status_code == 404: return b"NOT_FOUND"
             if r.status_code == 429: return b"RATE_LIMITED"
-            if r.status_code == 403: return b"FORBIDDEN"
+            if r.status_code == 403:
+                # GitHub rate limits often show up as 403 with remaining=0 or a retry hint.
+                # Example: X-RateLimit-Remaining=0 => treat it like 429 so proxies can try.
+                if r.headers.get("X-RateLimit-Remaining", "") == "0":
+                    return b"RATE_LIMITED"
+                if r.headers.get("Retry-After"):
+                    return b"RATE_LIMITED"
+                return b"FORBIDDEN"
             if r.status_code != 200: return f"FAILED_{r.status_code}".encode()
             
             content = bytearray()
@@ -545,7 +632,42 @@ def download_github_url(target_url: str, thread_tag: str, action_label: str) -> 
     http_headers = {"User-Agent": SPOOFED_USER_AGENT}
     
     res = b"FAILED"
-    
+    tried_proxies = False
+
+    def is_fail(val: Optional[bytes]) -> bool:
+        return isinstance(val, bytes) and (val in[b"FAILED", b"TIMEOUT", b"RATE_LIMITED", b"FORBIDDEN", b"CONN_DROPPED", b"CONN_ERROR", b"FAILED_EXC"] or val.startswith(b"FAILED"))
+
+    def try_proxies() -> Tuple[Optional[bytes], str]:
+        mixed = get_active_proxies()
+        if not mixed:
+            return b"FAILED", "-"
+        random.shuffle(mixed)
+        for proxy_ip in mixed:
+            raise_if_exit_requested()
+            check_pause(thread_tag, "[cyan]Testing Proxy...[/]", proxy_ip)
+            update_thread_board(thread_tag, action="[cyan]Testing Proxy...[/]", active_ip=proxy_ip, dl_bytes=0)
+            proxy_dict = fmt_proxy(proxy_ip)
+            out = fetch_with_progress(target_url, http_headers, proxy_dict, thread_tag, proxy_ip, action_label, PROXY_TIMEOUTS)
+            if out == b"NOT_FOUND":
+                mark_proxy_ok(proxy_ip)
+                return None, proxy_ip
+            if out == b"TOO_LARGE":
+                mark_proxy_ok(proxy_ip)
+                return b"TOO_LARGE", proxy_ip
+            if not (isinstance(out, bytes) and (out in[b"TIMEOUT", b"RATE_LIMITED", b"FORBIDDEN", b"CONN_DROPPED", b"CONN_ERROR", b"FAILED_EXC"] or out.startswith(b"FAILED"))):
+                mark_proxy_ok(proxy_ip)
+                return out, proxy_ip
+            if out in [b"TIMEOUT", b"CONN_DROPPED", b"CONN_ERROR", b"FAILED_EXC"] or (isinstance(out, bytes) and out.startswith(b"FAILED")) or out == b"FORBIDDEN":
+                mark_proxy_bad(proxy_ip, out)
+        return b"FAILED", "All Proxies Failed"
+
+    # Prefer proxy first when requested (handy for testing).
+    if PREFER_PROXY and get_active_proxies():
+        tried_proxies = True
+        res, ip = try_proxies()
+        if res is None or res == b"TOO_LARGE" or not is_fail(res):
+            return res, ip
+
     for attempt in range(6):
         raise_if_exit_requested()
         action_str = f"[yellow]Connecting...[/]" if attempt == 0 else f"[yellow]Retrying Direct ({attempt}/5)...[/]"
@@ -575,16 +697,10 @@ def download_github_url(target_url: str, thread_tag: str, action_label: str) -> 
                 raise ScanInterrupted
             continue
             
-    # If direct access still ends in 403 after the retries, skip proxy fallback entirely.
-    if res == b"FORBIDDEN":
-        update_thread_board(thread_tag, action=f"[red]Direct Forbidden (403) - Skipping[/]", active_ip="Direct IP", dl_bytes=0)
-        if not interruptible_sleep(1.0):
-            raise ScanInterrupted
-        return b"FORBIDDEN_SKIP", "Direct IP"
-
     # Turn transport errors into short status text for the dashboard.
     reason_str = "Failed"
     if res == b"RATE_LIMITED": reason_str = "Rate Limited"
+    elif res == b"FORBIDDEN": reason_str = "Forbidden (403)"
     elif res == b"TIMEOUT": reason_str = "Timeout"
     elif res == b"CONN_DROPPED": reason_str = "Conn Dropped"
     elif res == b"CONN_ERROR": reason_str = "Conn Error"
@@ -595,23 +711,9 @@ def download_github_url(target_url: str, thread_tag: str, action_label: str) -> 
     if not interruptible_sleep(1.0):
         raise ScanInterrupted
 
-    mixed_proxies = active_proxies[:]
-    if not mixed_proxies: return b"FAILED", "-"
-    random.shuffle(mixed_proxies)
-
-    for proxy_ip in mixed_proxies:
-        raise_if_exit_requested()
-        check_pause(thread_tag, "[cyan]Testing Proxy...[/]", proxy_ip)
-        update_thread_board(thread_tag, action="[cyan]Testing Proxy...[/]", active_ip=proxy_ip, dl_bytes=0)
-        proxy_dict = {"http": f"http://{proxy_ip}", "https": f"http://{proxy_ip}"}
-        
-        res = fetch_with_progress(target_url, http_headers, proxy_dict, thread_tag, proxy_ip, action_label)
-        if res == b"NOT_FOUND": return None, proxy_ip
-        if res == b"TOO_LARGE": return b"TOO_LARGE", proxy_ip
-        if not (isinstance(res, bytes) and (res in[b"TIMEOUT", b"RATE_LIMITED", b"FORBIDDEN", b"CONN_DROPPED", b"CONN_ERROR", b"FAILED_EXC"] or res.startswith(b"FAILED"))):
-            return res, proxy_ip
-            
-    return b"FAILED", "All Proxies Failed"
+    if tried_proxies:
+        return b"FAILED", "All Proxies Failed"
+    return try_proxies()
 
 def regex_grep_text(raw_text: str, filename: str) -> List[dict]:
     return grep_scanner_text(raw_text, filename, API_SIGNATURES, LINE_CUTOFF)
@@ -863,7 +965,7 @@ def main():
         console.print("[bold yellow]Queue is empty.[/] No new repositories to scan.")
         return
 
-    active_proxies = read_proxies()
+    set_active_proxies(read_proxies())
     scoreboard["total"] = len(queued_targets)
     scoreboard["remaining"] = len(queued_targets)
     
@@ -945,6 +1047,7 @@ def main():
             pause_event.set()
         if keyboard_thread is not None:
             keyboard_thread.join(timeout=1.0)
+        save_good_proxies()
 
 if __name__ == "__main__":
     install_signal_handlers()
