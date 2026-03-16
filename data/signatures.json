@@ -236,6 +236,111 @@
       "name": "PocketBase Token",
       "pattern": "(?i)pocketbase[\\w\\s=-]{0,20}(?:key|token|admin)[\\w\\s=:\\\"\\'-]{0,10}\\b([a-zA-Z0-9\\-_]{32,})\\b",
       "tags": []
+    },
+    {
+      "name": "AWS Secret Access Key (Env Var)",
+      "pattern": "(?i)aws_secret_access_key\\s*[:=]\\s*['\\\"]?([A-Za-z0-9/+=]{40})['\\\"]?",
+      "tags": []
+    },
+    {
+      "name": "Stripe Webhook Secret",
+      "pattern": "\\bwhsec_[a-zA-Z0-9]{32,}\\b",
+      "tags": []
+    },
+    {
+      "name": "Slack App Token",
+      "pattern": "\\bxapp-[A-Za-z0-9-]{20,}\\b",
+      "tags": []
+    },
+    {
+      "name": "Google OAuth Client Secret",
+      "pattern": "\\bGOCSPX-[A-Za-z0-9_-]{20,}\\b",
+      "tags": []
+    },
+    {
+      "name": "Google OAuth Access Token",
+      "pattern": "\\bya29\\.[A-Za-z0-9_-]{20,}\\b",
+      "tags": []
+    },
+    {
+      "name": "Twilio Auth Token (Context)",
+      "pattern": "(?i)twilio[\\w\\s=-]{0,20}(?:auth|token)[\\w\\s=:\\\"\\'-]{0,10}\\b([0-9a-f]{32})\\b",
+      "tags": []
+    },
+    {
+      "name": "Azure Storage Connection String",
+      "pattern": "DefaultEndpointsProtocol=https?;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{40,};EndpointSuffix=core\\.windows\\.net",
+      "tags": []
+    },
+    {
+      "name": "MongoDB Connection URI",
+      "pattern": "mongodb(?:\\+srv)?:\\/\\/[^\\s:@/]+:[^\\s@/]+@[^\\s/]+",
+      "tags": []
+    },
+    {
+      "name": "PostgreSQL Connection URI",
+      "pattern": "(?:postgres|postgresql):\\/\\/[^\\s:@/]+:[^\\s@/]+@[^\\s/]+",
+      "tags": []
+    },
+    {
+      "name": "MySQL/MariaDB Connection URI",
+      "pattern": "(?:mysql|mariadb):\\/\\/[^\\s:@/]+:[^\\s@/]+@[^\\s/]+",
+      "tags": []
+    },
+    {
+      "name": "Redis Connection URI (Password)",
+      "pattern": "redis(?:\\+ssl)?:\\/\\/:?[^\\s@/]+@[^\\s/]+",
+      "tags": []
+    },
+    {
+      "name": "RabbitMQ/AMQP URI",
+      "pattern": "amqps?:\\/\\/[^\\s:@/]+:[^\\s@/]+@[^\\s/]+",
+      "tags": []
+    },
+    {
+      "name": "Mailchimp API Key (Context)",
+      "pattern": "(?i)mailchimp[\\w\\s=-]{0,20}(?:key|token|api)[\\w\\s=:\\\"\\'-]{0,10}\\b([0-9a-f]{32}-us\\d{1,2})\\b",
+      "tags": []
+    },
+    {
+      "name": "Datadog API Key (Context)",
+      "pattern": "(?i)datadog[\\w\\s=-]{0,20}(?:api|app)?[\\w\\s=-]{0,10}(?:key|token)[\\w\\s=:\\\"\\'-]{0,10}\\b([a-f0-9]{32})\\b",
+      "tags": []
+    },
+    {
+      "name": "Algolia Admin API Key (Context)",
+      "pattern": "(?i)algolia[\\w\\s=-]{0,20}(?:admin|key|token)[\\w\\s=:\\\"\\'-]{0,10}\\b([A-Za-z0-9]{32})\\b",
+      "tags": []
+    },
+    {
+      "name": "Cloudinary API Secret (Context)",
+      "pattern": "(?i)cloudinary[\\w\\s=-]{0,20}(?:api_secret|secret)[\\w\\s=:\\\"\\'-]{0,10}\\b([A-Za-z0-9]{32})\\b",
+      "tags": []
+    },
+    {
+      "name": "Private Key (PKCS8)",
+      "pattern": "-----BEGIN PRIVATE KEY-----",
+      "tags": []
+    },
+    {
+      "name": "Private Key (RSA)",
+      "pattern": "-----BEGIN RSA PRIVATE KEY-----",
+      "tags": []
+    },
+    {
+      "name": "Private Key (EC)",
+      "pattern": "-----BEGIN EC PRIVATE KEY-----",
+      "tags": []
+    },
+    {
+      "name": "Private Key (OPENSSH)",
+      "pattern": "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "tags": []
+    },
+    {
+      "name": "PGP Private Key Block",
+      "pattern": "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+      "tags": []
     }
   ]
 }
