@@ -145,12 +145,27 @@ This opens the launcher. From there:
 - Type `Manual` to open the numbered control center OR,
 - Type `help` to see how the workflow works
 
-Example requests:
+### How to Use: AI Workflow
 
-- `show all the API keys`
-- `find any Discord tokens`
-- `start scanning`
-- `run discovery for last 3 minutes, then scan`
+The AI workflow is the fastest way to run the tool because it understands natural language and chains the right stages for you.
+
+1. Start the launcher with `python main.py`.
+2. At the launch screen, press `Enter` to go into the AI workflow.
+3. When prompted, describe what you want in plain English.
+4. The workflow will plan the steps (discovery, scanning, query) and run them in order.
+5. When the run finishes, you can ask another question or switch to Manual mode.
+
+Examples you can type:
+
+1. `discover new repos for the last 5 minutes, then scan`
+2. `scan the current queue with commit history off`
+3. `show all Slack tokens from the findings`
+4. `run discovery and scanning, then summarize leaks by category`
+
+Notes:
+1. If your request is only about existing results (like “show all API keys”), it skips discovery and scanning and just queries the local database.
+2. For larger runs, setting `GITHUB_TOKEN` (or `GH_TOKEN`) helps avoid GitHub rate limits.
+3. If you want the scanner to persist proxy pruning, launch with `python main.py --up-proxy`.
 
 ### AI Workflow Orchestrator
 
@@ -191,9 +206,11 @@ CLI flags:
 --scan-heroku-keys
 --no-commit-history
 --prefer-proxy
+--up-proxy
 ```
 
 The scanner reads from `recent_repos.json`, resolves the repository's default branch when possible, downloads each repository as a ZIP archive, and scans it against the supported secret signatures. It can also inspect recent commit patches. Results are written to `leaked_keys.json`, `clean_repos.json`, or `failed_repos.json`. Scanned repositories are removed from the queue.
+If you are scanning at scale, set `GITHUB_TOKEN` (or `GH_TOKEN`) in your environment so GitHub gives you a higher rate limit.
 
 **Scanner controls:**
 - `Space`: Pause/resume scanning
@@ -225,6 +242,7 @@ All network-facing scripts support HTTP proxy rotation. Create a file named `liv
 ```
 
 Proxies are used as a fallback when direct GitHub requests are rate-limited or blocked.
+By default the scanner does not rewrite your proxy list. If you want it to prune dead proxies and persist only the working ones, run the launcher with `python main.py --up-proxy` (or run the scanner directly with `python src/APIScanner.py --up-proxy`).
 
 ---
 
@@ -251,6 +269,7 @@ Examples of supported categories include:
 ## Configuration
 
 - `GROQ_API_KEY`: Required for AI workflow routing and AI search. If not set, the tools will prompt for it.
+- `GITHUB_TOKEN` / `GH_TOKEN`: Optional. Increases GitHub API rate limits for metadata and archive requests.
 - `AI_POLICY_PATH`: Optional. Overrides the default policy path (`config/ai_policy.json`).
 
 **`config/ai_policy.json`**
