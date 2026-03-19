@@ -87,6 +87,20 @@ API Sniffer/
 │   ├── APIScanner.py               # Stage 2: Repository scanning and secret detection
 │   ├── AISearch.py                 # Stage 3: AI-powered local database search
 │   ├── AIWorkflow.py               # AI workflow router and stage orchestrator
+│   ├── scanner/
+│   │   ├── __init__.py
+│   │   ├── scanner_state.py        # Global constants + mutable runtime state
+│   │   ├── scanner_args.py         # CLI parsing, overrides, state reset
+│   │   ├── scanner_signals.py      # OS signal handlers
+│   │   ├── scanner_token.py        # GitHub token prompt
+│   │   ├── scanner_branch.py       # Branch name resolution
+│   │   ├── scanner_proxy.py        # Proxy list I/O and health tracking
+│   │   ├── scanner_io.py           # Atomic JSON persistence
+│   │   ├── scanner_network.py      # HTTP download + proxy-fallback loop
+│   │   ├── scanner_archive.py      # ZIP / TAR / git archive handling
+│   │   ├── scanner_ui.py           # Dashboard state + log queues
+│   │   ├── scanner_keyboard.py     # Background keyboard monitor
+│   │   └── scanner_targets_live.py # Runtime AI-driven target injection
 │   └── shared/
 │       ├── __init__.py
 │       ├── ai_client.py            # Groq API client + key handling
