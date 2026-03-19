@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 
-MAX_THREADS = 15
+MAX_THREADS = 20
 SCAN_HEROKU_KEYS = False
 SCAN_COMMIT_HISTORY = True
 MAX_HISTORY_DEPTH = 10
