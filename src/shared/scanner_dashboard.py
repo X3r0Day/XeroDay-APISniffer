@@ -65,7 +65,7 @@ def paint_dashboard(
             Layout(
                 Panel(
                     top_bar_text,
-                    title=f"[bold magenta]XeroDay-API Scanner 1.0 (Hunting {api_signature_count} API Types)[/]",
+                    title=f"[bold magenta]XeroDay-API Scanner 2.0 (Hunting {api_signature_count} API Types)[/]",
                     border_style="magenta",
                 ),
                 size=3,

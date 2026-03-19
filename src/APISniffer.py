@@ -57,6 +57,7 @@ import time
 import sys
 import tempfile
 import requests
+from pathlib import Path
 from typing import List, Optional
 
 from datetime import (
@@ -69,8 +70,11 @@ from datetime import (
 
 LOOKBACK_MINS = 1     # 20 mins for now is enough unless you need bigger dataset
 CHUNK_MINS = 1        # Time-slice per chunk
-TARGET_QUEUE_FILE = "recent_repos.json"
-PROXY_FILE = "live_proxies.txt"
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+TARGET_QUEUE_FILE = str(ROOT_DIR / "recent_repos.json")
+PROXY_FILE = str(ROOT_DIR / "live_proxies.txt")
+
 RESULTS_PER_PAGE = 100
 PAGES_TO_SCRAPE = 10  # GH only allows 1k
 NET_TIMEOUT = 10
@@ -78,7 +82,11 @@ PROXY_RETRY_LIMIT = 200
 
 MAX_SPLIT_DEPTH = 10
 
-SCANNED_HISTORY = ["clean_repos.json", "failed_repos.json", "leaked_keys.json"]
+SCANNED_HISTORY = [
+    str(ROOT_DIR/"clean_repos.json"),
+    str(ROOT_DIR/"failed_repos.json"),
+    str(ROOT_DIR/"leaked_keys.json"),
+]
 
 SPOOFED_UA = "XeroDay-APISniffer/1.0"
 shutdown_requested = False
