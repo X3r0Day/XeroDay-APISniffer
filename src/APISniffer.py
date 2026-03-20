@@ -53,12 +53,13 @@ import json
 import os
 import random
 import signal
-import time
 import sys
 import tempfile
-import requests
+import time
 from pathlib import Path
 from typing import List, Optional
+
+from shared.requests_compat import requests
 
 from datetime import (
     datetime,
@@ -68,15 +69,15 @@ from datetime import (
 
 
 
-LOOKBACK_MINS = 1     # 20 mins for now is enough unless you need bigger dataset
+LOOKBACK_MINS = 3     # 3 mins for now is enough unless you need bigger dataset
 CHUNK_MINS = 1        # Time-slice per chunk
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 TARGET_QUEUE_FILE = str(ROOT_DIR / "recent_repos.json")
 PROXY_FILE = str(ROOT_DIR / "live_proxies.txt")
 
-RESULTS_PER_PAGE = 100
-PAGES_TO_SCRAPE = 10  # GH only allows 1k
+RESULTS_PER_PAGE = 100   # GH only allows 100
+PAGES_TO_SCRAPE = 10     # GH only allows 10
 NET_TIMEOUT = 10
 PROXY_RETRY_LIMIT = 200
 
@@ -90,6 +91,10 @@ SCANNED_HISTORY = [
 
 SPOOFED_UA = "XeroDay-APISniffer/1.0"
 shutdown_requested = False
+
+
+class DiscoveryRequestError(RuntimeError):
+    pass
 
 
 def parse_args():
@@ -122,8 +127,8 @@ def grab_proxies(filepath: str = PROXY_FILE) -> List[str]:
         return []
 
 
-def get_search_query(datetime, end_time: datetime, page: int = 1) -> dict:
-    start_str = datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
+def get_search_query(start_time: datetime, end_time: datetime, page: int = 1) -> dict:
+    start_str = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
     end_str = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     return {
@@ -137,6 +142,13 @@ def get_search_query(datetime, end_time: datetime, page: int = 1) -> dict:
 
 def format_proxy_dict(ip_port: str) -> dict:
     return {"http": f"http://{ip_port}", "https": f"http://{ip_port}"}
+
+# Will remove proxy if bad proxy.
+def remove_proxy(proxy_pool: List[str], proxy_ip: str) -> None:
+    try:
+        proxy_pool.remove(proxy_ip)
+    except ValueError:
+        pass
 
 
 def request_shutdown(_signum, _frame) -> None:
@@ -216,13 +228,15 @@ def make_request(
         raise KeyboardInterrupt
 
     browser_headers = build_github_headers()
+    direct_error: Optional[Exception] = None
 
     # Try with our real IP first
     try:
         req = session_obj.get(
             endpoint, params=query, headers=browser_headers, timeout=NET_TIMEOUT
         )
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        direct_error = exc
         req = None
 
     if req is not None and req.status_code == 200:
@@ -231,14 +245,14 @@ def make_request(
     # If blocked or failed, then it'll just use proxylist
     if not ips:
         if req is None:
-            raise SystemExit("Direct connection failed and no proxies loaded.")
+            raise DiscoveryRequestError("Direct connection failed and no proxies loaded.") from direct_error
         return req
 
     pool = ips[:]
     random.shuffle(pool)
 
     tried = 0
-    last_error = None
+    last_error: Optional[Exception] = direct_error
     for ip in pool:
         if tried >= PROXY_RETRY_LIMIT:
             break
@@ -261,15 +275,20 @@ def make_request(
                 raise KeyboardInterrupt
         except requests.RequestException as e:
             last_error = e
+            remove_proxy(ips, ip)
+            print(f"[-] Proxy {ip} failed with {type(e).__name__}. Removing it from the pool.")
             if not interruptible_sleep(0.15):
                 raise KeyboardInterrupt
             continue
 
     if req is not None:
         return req
+
     if last_error is not None:
-        raise SystemExit(f"All proxies died. Last error: {last_error}")
-    raise SystemExit("Exhausted all options. No response.")
+        raise DiscoveryRequestError(
+            f"Direct request failed and no working proxies remained. Last error: {last_error}"
+        ) from last_error
+    raise DiscoveryRequestError("Exhausted all options. No response.")
 
 
 def sync_results_to_disk(raw_json: dict, filename: str = TARGET_QUEUE_FILE):
@@ -377,7 +396,11 @@ def main():
             print(f"[Chunk {chunk_idx}] {t_start} -> {t_end} UTC")
 
             api_query = get_search_query(start_time, end_time, page=1)
-            req = make_request(http_session, api_url, api_query, proxies)
+            try:
+                req = make_request(http_session, api_url, api_query, proxies)
+            except DiscoveryRequestError as exc:
+                print(f"  [-] Chunk request failed. Skipping chunk. {exc}")
+                continue
 
             if req.status_code == 422:
                 print("  [-] Target chunk rejected (422). Moving on.")
@@ -427,7 +450,11 @@ def main():
                 api_query = get_search_query(start_time, end_time, page=page_num)
                 print(f"  -> Fetching Page {page_num}/{pages_needed}...")
 
-                req = make_request(http_session, api_url, api_query, proxies)
+                try:
+                    req = make_request(http_session, api_url, api_query, proxies)
+                except DiscoveryRequestError as exc:
+                    print(f"  [-] Page {page_num} request failed. Stopping this chunk. {exc}")
+                    break
 
                 if req.status_code == 422:
                     print("  [-] Reached max pagination limit. Bailing out.")

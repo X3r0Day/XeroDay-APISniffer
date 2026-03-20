@@ -72,7 +72,7 @@ import threading
 import time
 import zipfile
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 from rich.console import Console
 from rich.live import Live
@@ -123,6 +123,37 @@ def paint_dashboard():
         state.MAX_DOWNLOAD_SIZE_BYTES,
     )
 
+
+def dedupe_by_secs(findings: List[dict]) -> List[dict]:
+    unique_findings = []
+    seen_secrets = set()
+
+    for finding in findings:
+        secret = finding.get("secret")
+        if secret in seen_secrets:
+            continue
+        seen_secrets.add(secret)
+        unique_findings.append(finding)
+
+    return unique_findings
+
+
+def scan_repo_via_git_fallback(
+    repo_name: str,
+    branch: str,
+    thread_tag: str,
+    api_signatures: dict,
+) -> tuple[List[dict], Optional[str]]:
+    git_dir, _git_err = clone_repo_git(repo_name, branch, thread_tag)
+    if not git_dir:
+        return [], "FAILED"
+
+    try:
+        return scan_repo_dir(git_dir, thread_tag, "git", api_signatures)
+    finally:
+        shutil.rmtree(git_dir, ignore_errors=True)
+
+
 # This scans one repository end to end and returns the final payload used for persistence.
 def dissect_repo_memory(repo_data: dict, thread_tag: str) -> dict:
     raise_if_exit_requested()
@@ -156,11 +187,10 @@ def dissect_repo_memory(repo_data: dict, thread_tag: str) -> dict:
             break
 
         if archive_payload is None or archive_payload == b"FAILED":
-            git_dir, git_err = clone_repo_git(target_repo, git_branch, thread_tag)
+            git_dir, _git_err = clone_repo_git(target_repo, git_branch, thread_tag)
             if git_dir:
                 archive_payload = git_dir
                 archive_kind = "git"
-                archive_source = "git"
                 successful_ip = "git"
                 successful_branch = git_branch
                 break
@@ -198,13 +228,35 @@ def dissect_repo_memory(repo_data: dict, thread_tag: str) -> dict:
         else:
             scan_status = "FAILED"
     except zipfile.BadZipFile:
-        log_dead_repo(target_repo, "Corrupted Zip", successful_ip, round(time.time() - start_time, 2))
-        bump_score("failed"); bump_score("scanned")
-        return {"repo": target_repo, "status": "failed", "reason": "BadZipFile", "ip": successful_ip, "time_taken": round(time.time() - start_time, 2)}
+        if archive_kind != "git":
+            log_msg(f"[yellow][!] Invalid ZIP payload for {target_repo}. Falling back to git clone.[/]")
+            caught_keys, scan_status = scan_repo_via_git_fallback(
+                target_repo,
+                successful_branch,
+                thread_tag,
+                API_SIGNATURES,
+            )
+            if scan_status != "FAILED":
+                successful_ip = "git"
+        else:
+            log_dead_repo(target_repo, "Corrupted Zip", successful_ip, round(time.time() - start_time, 2))
+            bump_score("failed"); bump_score("scanned")
+            return {"repo": target_repo, "status": "failed", "reason": "BadZipFile", "ip": successful_ip, "time_taken": round(time.time() - start_time, 2)}
     except tarfile.TarError:
-        log_dead_repo(target_repo, "Corrupted Tar", successful_ip, round(time.time() - start_time, 2))
-        bump_score("failed"); bump_score("scanned")
-        return {"repo": target_repo, "status": "failed", "reason": "BadTarFile", "ip": successful_ip, "time_taken": round(time.time() - start_time, 2)}
+        if archive_kind != "git":
+            log_msg(f"[yellow][!] Invalid TAR payload for {target_repo}. Falling back to git clone.[/]")
+            caught_keys, scan_status = scan_repo_via_git_fallback(
+                target_repo,
+                successful_branch,
+                thread_tag,
+                API_SIGNATURES,
+            )
+            if scan_status != "FAILED":
+                successful_ip = "git"
+        else:
+            log_dead_repo(target_repo, "Corrupted Tar", successful_ip, round(time.time() - start_time, 2))
+            bump_score("failed"); bump_score("scanned")
+            return {"repo": target_repo, "status": "failed", "reason": "BadTarFile", "ip": successful_ip, "time_taken": round(time.time() - start_time, 2)}
     finally:
         if git_dir:
             shutil.rmtree(git_dir, ignore_errors=True)
@@ -255,18 +307,13 @@ def dissect_repo_memory(repo_data: dict, thread_tag: str) -> dict:
     elapsed = round(time.time() - start_time, 2)
     
     if caught_keys:
-        unique_findings =[]
-        seen_secrets = set()
         # Deduplicate by secret value so the same token does not flood the report.
         # For example, the same key may appear in both a source file and a patch.
-        for k in caught_keys:
-            if k["secret"] not in seen_secrets:
-                seen_secrets.add(k["secret"])
-                unique_findings.append(k)
-                
+        unique_findings = dedupe_by_secs(caught_keys)
+
         bump_score("leaks")
-        files_with_hits = list(set([k["file"] for k in unique_findings]))
-        found_api_types = set([k["type"] for k in unique_findings])
+        files_with_hits = sorted({k["file"] for k in unique_findings})
+        found_api_types = {k["type"] for k in unique_findings}
         log_loot(target_repo, files_with_hits, len(unique_findings), found_api_types, successful_ip, elapsed)
         
         return {"repo": target_repo, "url": repo_data.get("url"), "status": "leaked", "total_secrets": len(unique_findings), "findings": unique_findings, "ip": successful_ip, "time_taken": elapsed}
@@ -284,7 +331,7 @@ def thread_runner(repo_data: dict):
         return dissect_repo_memory(repo_data, thread_tag)
     except ScanInterrupted:
         raise
-    except Exception as e:
+    except Exception:
         safe_name = repo_data.get("name", "Unknown_Repo")
         log_dead_repo(safe_name, "Critical Thread Crash", "-", 0.0)
         bump_score("failed"); bump_score("scanned")
