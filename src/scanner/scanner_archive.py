@@ -5,7 +5,6 @@
 
 import io
 import os
-import re
 import shutil
 import subprocess
 import tarfile
@@ -152,6 +151,23 @@ def scan_repo_dir(
     return caught, None
 
 
+def is_valid_archive_bytes(payload: bytes, kind: str) -> bool:
+    if not isinstance(payload, bytes) or not payload:
+        return False
+
+    if kind == "zip":
+        return zipfile.is_zipfile(io.BytesIO(payload))
+
+    if kind == "tar":
+        try:
+            with tarfile.open(fileobj=io.BytesIO(payload), mode="r:*"):
+                return True
+        except tarfile.TarError:
+            return False
+
+    return False
+
+
 def clone_repo_git(
     repo_name: str, branch: str, thread_tag: str,
 ) -> Tuple[Optional[str], Optional[str]]:
@@ -205,5 +221,13 @@ def download_repo_archive(
         if payload is None or payload == b"FAILED":
             continue
         if isinstance(payload, bytes):
+            if not is_valid_archive_bytes(payload, kind):
+                update_thread_board(
+                    thread_tag,
+                    action=f"[yellow]Rejected invalid {kind.upper()} payload[/]",
+                    active_ip=current_ip,
+                    dl_bytes=0,
+                )
+                continue
             return payload, kind, current_ip
     return None, None, "Direct IP"

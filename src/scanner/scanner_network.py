@@ -8,10 +8,9 @@ import random
 import time
 from typing import List, Optional, Tuple
 
-import requests
-
 from . import scanner_state as state
 from .scanner_proxy import fmt_proxy, get_active_proxies, mark_proxy_bad, mark_proxy_ok
+from shared.requests_compat import requests
 
 
 
