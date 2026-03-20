@@ -3,8 +3,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-import requests
 from rich.prompt import Prompt
+from shared.requests_compat import requests
 
 
 def get_key(console=None) -> str:
