@@ -6,6 +6,22 @@ The project is organized around discovery, scanning, and querying, with an AI-fi
 
 ---
 
+## Configuration
+
+- `export GROQ_API_KEY="gsk_xx"`: Required for AI workflow routing and AI search. If not set, the tools will prompt for it.
+- `export GITHUB_TOKEN="github_pat_xx"` / `export GH_TOKEN="github_pat_xx"`: Optional. Increases GitHub API rate limits for metadata and archive requests.
+- `AI_POLICY_PATH`: Optional. Overrides the default policy path (`config/ai_policy.json`).
+
+**`config/ai_policy.json`**
+- Defines the Groq API endpoint, model name, and temperature settings.
+- Controls workflow routing rules and the AI query planner behavior.
+
+**`data/signatures.json`**
+- Contains all signature definitions (name + regex + tags).
+- Heroku rules are tagged `heroku` and can be included with `--scan-heroku-keys`.
+
+---
+
 ## How It Works
 
 API Sniffer supports two operating modes:
@@ -280,28 +296,11 @@ Examples of supported categories include:
 
 ---
 
-## Configuration
-
-- `GROQ_API_KEY`: Required for AI workflow routing and AI search. If not set, the tools will prompt for it.
-- `GITHUB_TOKEN` / `GH_TOKEN`: Optional. Increases GitHub API rate limits for metadata and archive requests.
-- `AI_POLICY_PATH`: Optional. Overrides the default policy path (`config/ai_policy.json`).
-
-**`config/ai_policy.json`**
-- Defines the Groq API endpoint, model name, and temperature settings.
-- Controls workflow routing rules and the AI query planner behavior.
-
-**`data/signatures.json`**
-- Contains all signature definitions (name + regex + tags).
-- Heroku rules are tagged `heroku` and can be included with `--scan-heroku-keys`.
-
----
-
 ## Outputs and Data Files
 
 **`recent_repos.json`** (discovery queue)
 
-```json
-[
+```json[
   {
     "name": "owner/repo",
     "created_at": "2024-01-01T00:00:00Z",
@@ -313,14 +312,13 @@ Examples of supported categories include:
 
 **`leaked_keys.json`** (findings database)
 
-```json
-[
+```json[
   {
     "repo": "owner/repo",
     "url": "https://github.com/owner/repo",
     "status": "leaked",
     "total_secrets": 2,
-    "findings": [
+    "findings":[
       {
         "file": "path/to/file",
         "line": 12,
@@ -334,8 +332,7 @@ Examples of supported categories include:
 
 **`clean_repos.json`** (no findings)
 
-```json
-[
+```json[
   {
     "repo": "owner/repo",
     "url": "https://github.com/owner/repo",
@@ -346,8 +343,7 @@ Examples of supported categories include:
 
 **`failed_repos.json`** (download/scan failures)
 
-```json
-[
+```json[
   {
     "repo": "owner/repo",
     "status": "failed",
