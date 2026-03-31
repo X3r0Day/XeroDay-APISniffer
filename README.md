@@ -367,3 +367,6 @@ Use it responsibly, respect platform rules and rate limits, and follow responsib
 ## License
 
 Part of the X3r0Day Framework. Free to use, modify, and redistribute with "**proper credit**" to the original project.
+
+THIS USER HAS CONTRIBUTED TO: https://github.com/torvalds/linux
+THIS USER HAS CONTRIBUTED TO: https://github.com/danielmiessler/seclists
