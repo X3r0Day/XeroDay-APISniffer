@@ -4,8 +4,6 @@ API Sniffer is a GitHub-focused secret discovery toolkit for scanning public rep
 
 The project is organized around discovery, scanning, and querying, with an AI-first launcher, a workflow orchestrator, shared routing/search utilities, and a live scanner dashboard.
 
-I WRITE VERY CLEAN CODE WHICH IS EASY TO MAINTAIN.
-
 ---
 
 ## Configuration
@@ -367,6 +365,3 @@ Use it responsibly, respect platform rules and rate limits, and follow responsib
 ## License
 
 Part of the X3r0Day Framework. Free to use, modify, and redistribute with "**proper credit**" to the original project.
-
-THIS USER HAS CONTRIBUTED TO: https://github.com/torvalds/linux
-THIS USER HAS CONTRIBUTED TO: https://github.com/danielmiessler/seclists
