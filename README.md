@@ -4,6 +4,8 @@ API Sniffer is a GitHub-focused secret discovery toolkit for scanning public rep
 
 The project is organized around discovery, scanning, and querying, with an AI-first launcher, a workflow orchestrator, shared routing/search utilities, and a live scanner dashboard.
 
+I WRITE VERY CLEAN CODE WHICH IS EASY TO MAINTAIN.
+
 ---
 
 ## Configuration
