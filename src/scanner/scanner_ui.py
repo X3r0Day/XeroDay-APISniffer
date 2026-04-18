@@ -58,12 +58,14 @@ def log_loot(
     api_types: set,
     ip: str,
     elapsed: float,
+    stars: int = 0,
 ) -> None:
     short_files = ", ".join(file_list[:3]) + ("..." if len(file_list) > 3 else "")
     types_str = ", ".join(list(api_types))
+    crit_tag = "[bold yellow]CRITICAL[/] " if stars > 0 else ""
     with state.ui_mutex:
         state.leak_history.append(
-            f"[bold red]{target}[/] - {total_hits} secret(s) "
+            f"{crit_tag}[bold red]{target}[/] - {total_hits} secret(s) "
             f"([magenta]{types_str}[/]) in [yellow]{short_files}[/]"
             f"[dim] ({elapsed}s via {ip})[/]"
         )

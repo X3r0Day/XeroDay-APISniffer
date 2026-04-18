@@ -314,9 +314,10 @@ def dissect_repo_memory(repo_data: dict, thread_tag: str) -> dict:
         bump_score("leaks")
         files_with_hits = sorted({k["file"] for k in unique_findings})
         found_api_types = {k["type"] for k in unique_findings}
-        log_loot(target_repo, files_with_hits, len(unique_findings), found_api_types, successful_ip, elapsed)
+        repo_stars = repo_data.get("stars", 0)
+        log_loot(target_repo, files_with_hits, len(unique_findings), found_api_types, successful_ip, elapsed, repo_stars)
         
-        return {"repo": target_repo, "url": repo_data.get("url"), "status": "leaked", "total_secrets": len(unique_findings), "findings": unique_findings, "ip": successful_ip, "time_taken": elapsed}
+        return {"repo": target_repo, "url": repo_data.get("url"), "status": "leaked", "total_secrets": len(unique_findings), "critical": repo_stars > 0, "stars": repo_stars, "findings": unique_findings, "ip": successful_ip, "time_taken": elapsed}
     else:
         bump_score("clean")
         log_msg(f"[green][+] Clean:[/] {target_repo} [dim]({elapsed}s)[/]")

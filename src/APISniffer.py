@@ -91,6 +91,7 @@ SCANNED_HISTORY = [
 
 SPOOFED_UA = "XeroDay-APISniffer/1.0"
 shutdown_requested = False
+MODES = ["new", "trending", "relevant"]
 
 
 class DiscoveryRequestError(RuntimeError):
@@ -103,11 +104,12 @@ def parse_args():
     parser.add_argument("--chunk-mins", type=int, help="Time window per query chunk.")
     parser.add_argument("--pages-to-scrape", type=int, help="Maximum GitHub result pages to fetch per chunk.")
     parser.add_argument("--proxy-retry-limit", type=int, help="Maximum proxies to try before giving up.")
+    parser.add_argument("--modes", type=str, help="Comma-separated list of scan modes: new,trending,relevant")
     return parser.parse_args()
 
 
 def apply_runtime_overrides(args) -> None:
-    global LOOKBACK_MINS, CHUNK_MINS, PAGES_TO_SCRAPE, PROXY_RETRY_LIMIT
+    global LOOKBACK_MINS, CHUNK_MINS, PAGES_TO_SCRAPE, PROXY_RETRY_LIMIT, MODES
 
     if args.lookback_mins is not None:
         LOOKBACK_MINS = max(1, args.lookback_mins)
@@ -117,6 +119,12 @@ def apply_runtime_overrides(args) -> None:
         PAGES_TO_SCRAPE = max(1, args.pages_to_scrape)
     if args.proxy_retry_limit is not None:
         PROXY_RETRY_LIMIT = max(1, args.proxy_retry_limit)
+    if args.modes is not None:
+        valid_modes = {"new", "trending", "relevant"}
+        parsed_modes = [m.strip().lower() for m in args.modes.split(",")]
+        MODES = [m for m in parsed_modes if m in valid_modes]
+        if not MODES:
+            MODES = ["new", "trending", "relevant"]
 
 
 def grab_proxies(filepath: str = PROXY_FILE) -> List[str]:
@@ -127,17 +135,32 @@ def grab_proxies(filepath: str = PROXY_FILE) -> List[str]:
         return []
 
 
-def get_search_query(start_time: datetime, end_time: datetime, page: int = 1) -> dict:
+def get_search_query(start_time: datetime, end_time: datetime, page: int = 1, query_type: str = "new") -> dict:
     start_str = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
     end_str = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    return {
-        "q": f"created:{start_str}..{end_str}",
-        "sort": "created",
-        "order": "desc",
-        "per_page": RESULTS_PER_PAGE,
-        "page": page,
-    }
+    if query_type == "trending":
+        return {
+            "q": f"pushed:{start_str}..{end_str} stars:>50",
+            "sort": "stars",
+            "order": "desc",
+            "per_page": RESULTS_PER_PAGE,
+            "page": page,
+        }
+    elif query_type == "relevant":
+        return {
+            "q": f"API OR LLM OR key OR secret OR security pushed:{start_str}..{end_str}",
+            "per_page": RESULTS_PER_PAGE,
+            "page": page,
+        }
+    else:  # "new"
+        return {
+            "q": f"created:{start_str}..{end_str}",
+            "sort": "created",
+            "order": "desc",
+            "per_page": RESULTS_PER_PAGE,
+            "page": page,
+        }
 
 
 def format_proxy_dict(ip_port: str) -> dict:
@@ -371,7 +394,13 @@ def main():
         cursor = newest
         while cursor < now:
             chunk_end = min(cursor + timedelta(minutes=CHUNK_MINS), now)
-            chunks.append((cursor, chunk_end))
+            # Add chunks for each query mode defined in MODES
+            if "new" in MODES:
+                chunks.append((cursor, chunk_end, "new"))
+            if "trending" in MODES:
+                chunks.append((cursor, chunk_end, "trending"))
+            if "relevant" in MODES:
+                chunks.append((cursor, chunk_end, "relevant"))
             cursor = chunk_end
 
         # We process newest first, so reverse to use as a queue/stack
@@ -386,16 +415,22 @@ def main():
                 interrupted = True
                 break
 
-            start_time, end_time = chunks.pop(0)
+            chunk_item = chunks.pop(0)
+            if len(chunk_item) == 2:
+                start_time, end_time = chunk_item
+                query_type = "new"
+            else:
+                start_time, end_time, query_type = chunk_item
+
             chunk_idx += 1
             
             t_start = start_time.strftime('%H:%M:%S')
             t_end = end_time.strftime('%H:%M:%S')
 
             print(f"{'='*60}")
-            print(f"[Chunk {chunk_idx}] {t_start} -> {t_end} UTC")
+            print(f"[Chunk {chunk_idx}] {t_start} -> {t_end} UTC | Type: {query_type}")
 
-            api_query = get_search_query(start_time, end_time, page=1)
+            api_query = get_search_query(start_time, end_time, page=1, query_type=query_type)
             try:
                 req = make_request(http_session, api_url, api_query, proxies)
             except DiscoveryRequestError as exc:
@@ -428,8 +463,8 @@ def main():
                 else:
                     print(f"  [↓] The {repo_count} hits the 1k cap! Slicing chunk in half...")
                     # Insert the two halves (newer half first)
-                    chunks.insert(0, (start_time, mid_point))
-                    chunks.insert(0, (mid_point, end_time))
+                    chunks.insert(0, (start_time, mid_point, query_type))
+                    chunks.insert(0, (mid_point, end_time, query_type))
                     chunk_idx -= 1
                     continue
 
@@ -447,7 +482,7 @@ def main():
                     interrupted = True
                     break
 
-                api_query = get_search_query(start_time, end_time, page=page_num)
+                api_query = get_search_query(start_time, end_time, page=page_num, query_type=query_type)
                 print(f"  -> Fetching Page {page_num}/{pages_needed}...")
 
                 try:

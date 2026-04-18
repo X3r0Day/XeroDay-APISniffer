@@ -1,10 +1,20 @@
 import base64
 import ipaddress
 import json
+import math
 import re
 from typing import Dict, List, Optional, Pattern, Tuple
 from urllib.parse import SplitResult, urlsplit
 
+def shannon_entropy(data: str) -> float:
+    if not data:
+        return 0.0
+    entropy = 0.0
+    for x in set(data):
+        p_x = float(data.count(x)) / len(data)
+        if p_x > 0:
+            entropy += - p_x * math.log2(p_x)
+    return entropy
 
 def read_url_suffix(text_piece: str, start_idx: int) -> str:
     suffix_chars = []
@@ -164,6 +174,29 @@ def _looks_descriptive_secret(value: str) -> bool:
     return has_secret_word and has_placeholder_word
 
 
+def _is_highly_sequential_or_repetitive(val: str) -> bool:
+    val = val.lower()
+    if re.search(r"(.)\1{4,}", val):
+        return True
+    if re.search(r"(.{2,5})\1{2,}", val):
+        return True
+        
+    for i in range(len(val) - 4):
+        seq = val[i:i+5]
+        if all(ord(seq[j+1]) == ord(seq[j]) + 1 for j in range(4)):
+            return True
+        if all(ord(seq[j+1]) == ord(seq[j]) - 1 for j in range(4)):
+            return True
+
+    walks = ["qwertyuiop", "asdfghjkl", "zxcvbnm", "1234567890"]
+    walks.extend([w[::-1] for w in walks])
+    for w in walks:
+        for i in range(len(val) - 4):
+            if val[i:i+5] in w:
+                return True
+                
+    return False
+
 def _ph_val(value: str) -> bool:
     val = (value or "").strip()
     if not val:
@@ -177,10 +210,13 @@ def _ph_val(value: str) -> bool:
         return True
     if _looks_descriptive_secret(val):
         return True
-    if len(val) >= 6 and len(set(val)) == 1:
+    
+    if _is_highly_sequential_or_repetitive(val):
         return True
-    if len(val) <= 12 and re.fullmatch(r"(?:abc|def|xyz|123)+", low):
+        
+    if len(val) >= 8 and len(set(low)) <= 3 and not (":" in val and "@" in val):
         return True
+        
     if "example" in low and len(val) <= 80:
         return True
     if any(word in low for word in ("changeme", "replace", "your_", "your-", "your ")):
@@ -245,6 +281,12 @@ def _uri_looks_placeholder(secret: str) -> bool:
         return True
     if _looks_descriptive_secret(password):
         return True
+
+    # Check for passwords that are just the username or protocol
+    low_pass = password.lower()
+    if low_pass and (low_pass == username.lower() or low_pass == parsed.scheme.lower() or low_pass in hostname.lower()):
+        return True
+
     return False
 
 
@@ -314,6 +356,12 @@ def _is_false_positive_match(
         return True
     if api_name == "Google API/GCP Key" and _looks_like_firebase_web_config(filename, line_data, raw_text):
         return True
+        
+    # Check for low entropy (false positives)
+    ent = shannon_entropy(secret)
+    if ent < 3.2:
+        return True
+        
     return False
 
 
@@ -389,6 +437,7 @@ def regex_grep_text(
             "line": start_line,
             "type": key_type,
             "secret": block,
+            "entropy": shannon_entropy(block),
         })
 
     for line_idx, line_data in enumerate(raw_text.splitlines(), 1):
@@ -418,5 +467,6 @@ def regex_grep_text(
                         "line": line_idx,
                         "type": effective_name,
                         "secret": normalized_secret,
+                        "entropy": shannon_entropy(normalized_secret),
                     })
     return caught_keys

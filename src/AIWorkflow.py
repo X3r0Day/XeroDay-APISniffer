@@ -239,19 +239,23 @@ def build_stage_invocation(step: Dict[str, Any]) -> Dict[str, Any]:
     params = step["params"]
 
     if action == "discovery":
+        args = [
+            "--lookback-mins",
+            str(params["lookback_mins"]),
+            "--chunk-mins",
+            str(params["chunk_mins"]),
+            "--pages-to-scrape",
+            str(params["pages_to_scrape"]),
+            "--proxy-retry-limit",
+            str(params["proxy_retry_limit"]),
+        ]
+        if "modes" in params:
+            args.extend(["--modes", str(params["modes"])])
+
         return {
             "name": "Discovery Engine",
             "script": "APISniffer.py",
-            "args": [
-                "--lookback-mins",
-                str(params["lookback_mins"]),
-                "--chunk-mins",
-                str(params["chunk_mins"]),
-                "--pages-to-scrape",
-                str(params["pages_to_scrape"]),
-                "--proxy-retry-limit",
-                str(params["proxy_retry_limit"]),
-            ],
+            "args": args,
         }
 
     if action == "scanner":
