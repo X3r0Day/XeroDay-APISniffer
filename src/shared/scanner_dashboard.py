@@ -43,7 +43,7 @@ def paint_dashboard(
                 target_str = target_str[:22] + "..."
 
             action_str = current_state["action"]
-            if current_state["dl_bytes"] > 0 and "DL" in action_str:
+            if current_state["dl_bytes"] > 0 and ("DL" in action_str or "Downloading" in action_str):
                 mb_downloaded = current_state["dl_bytes"] / (1024 * 1024)
                 fill_ratio = min(1.0, current_state["dl_bytes"] / max_download_size_bytes)
                 blocks_filled = int(fill_ratio * 12)

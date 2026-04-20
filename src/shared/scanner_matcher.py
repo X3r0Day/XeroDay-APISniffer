@@ -1,12 +1,118 @@
 import base64
+import ctypes
 import ipaddress
 import json
 import math
+import os
 import re
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Dict, List, Optional, Pattern, Tuple
 from urllib.parse import SplitResult, urlsplit
 
+# So this part loads the C scanner for speed, falls back to python if it cant find it
+_SCANNER_DIR = Path(__file__).resolve().parent
+_C_SRC_PATH = _SCANNER_DIR / "fast_scanner.c"
+_SO_PATH = _SCANNER_DIR / "fast_scanner.so"
+
+_c_lib = None
+_c_initialized = False
+_c_build_attempted = False
+
+MATCH_CB_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_char_p)
+
+
+def _auto_compile_c() -> bool:
+    # tries to build the .so from source if its missing, needs gcc + pcre2
+    global _c_build_attempted
+    if _c_build_attempted:
+        return _SO_PATH.exists()
+    _c_build_attempted = True
+
+    if _SO_PATH.exists():
+        return True
+    if not _C_SRC_PATH.exists():
+        return False
+
+    if not shutil.which("gcc"):
+        return False
+
+    try:
+        check = subprocess.run(
+            ["pkg-config", "--exists", "libpcre2-8"],
+            capture_output=True, timeout=5
+        )
+        if check.returncode != 0:
+            return False
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+    cmd = [
+        "gcc", "-shared", "-fPIC", "-O3",
+        "-Wall", "-Wextra",
+        "-D_FORTIFY_SOURCE=2",
+        str(_C_SRC_PATH),
+        "-o", str(_SO_PATH),
+        "-lpcre2-8", "-lm",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=30)
+        if result.returncode == 0 and _SO_PATH.exists():
+            return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return False
+
+
+def _load_c_lib():
+    global _c_lib
+    if _c_lib is not None:
+        return _c_lib
+    _auto_compile_c()
+    if not _SO_PATH.exists():
+        return None
+    try:
+        _c_lib = ctypes.CDLL(str(_SO_PATH))
+        _c_lib.init_scanner.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p)]
+        _c_lib.init_scanner.restype = None
+        _c_lib.free_scanner.argtypes = []
+        _c_lib.free_scanner.restype = None
+        _c_lib.shannon_entropy_c.argtypes = [ctypes.c_char_p]
+        _c_lib.shannon_entropy_c.restype = ctypes.c_double
+        _c_lib.scan_text_c.argtypes = [ctypes.c_char_p, MATCH_CB_TYPE]
+        _c_lib.scan_text_c.restype = None
+        return _c_lib
+    except OSError:
+        _c_lib = None
+        return None
+
+
+def _ensure_c_init(api_signatures: Dict[str, "Pattern[str]"]):
+    global _c_initialized
+    lib = _load_c_lib()
+    if lib is None or _c_initialized:
+        return
+    names_list = []
+    regex_list = []
+    for name, pat in api_signatures.items():
+        names_list.append(name.encode("utf-8"))
+        regex_list.append(pat.pattern.encode("utf-8"))
+    count = len(names_list)
+    if count == 0:
+        return
+    c_names = (ctypes.c_char_p * count)(*names_list)
+    c_regexes = (ctypes.c_char_p * count)(*regex_list)
+    lib.init_scanner(count, c_names, c_regexes)
+    _c_initialized = True
+
+
+
+
 def shannon_entropy(data: str) -> float:
+    lib = _load_c_lib()
+    if lib is not None:
+        return lib.shannon_entropy_c(data.encode("utf-8", errors="replace"))
     if not data:
         return 0.0
     entropy = 0.0
@@ -284,7 +390,7 @@ def _uri_looks_placeholder(secret: str) -> bool:
 
     # Check for passwords that are just the username or protocol
     low_pass = password.lower()
-    if low_pass and (low_pass == username.lower() or low_pass == parsed.scheme.lower() or low_pass in hostname.lower()):
+    if low_pass and (low_pass == username.lower() or low_pass == parsed.scheme.lower() or (len(low_pass) > 4 and low_pass in hostname.lower())):
         return True
 
     return False
@@ -357,9 +463,9 @@ def _is_false_positive_match(
     if api_name == "Google API/GCP Key" and _looks_like_firebase_web_config(filename, line_data, raw_text):
         return True
         
-    # Check for low entropy (false positives)
+    # low entropy = probably fake, but short strings naturally have low entropy so skip those
     ent = shannon_entropy(secret)
-    if ent < 3.2:
+    if len(secret) > 15 and ent < 3.2:
         return True
         
     return False
@@ -423,6 +529,14 @@ def normalize_match(api_name: str, text_piece: str, hit) -> Optional[str]:
         return None
     return expanded_secret
 
+
+def _find_line_for_match(raw_text: str, match_text: str) -> Tuple[int, str]:
+    for line_idx, line_data in enumerate(raw_text.splitlines(), 1):
+        if match_text in line_data:
+            return line_idx, line_data
+    return 1, ""
+
+
 # This scans one decoded text blob and records normalized findings with file and line metadata.
 def regex_grep_text(
     raw_text: str,
@@ -431,6 +545,8 @@ def regex_grep_text(
     line_cutoff: int,
 ) -> List[dict]:
     caught_keys = []
+
+    # private keys are multiline so C cant handle them, python does it
     for key_type, start_line, block in _pk_blocks(raw_text):
         caught_keys.append({
             "file": filename,
@@ -440,33 +556,74 @@ def regex_grep_text(
             "entropy": shannon_entropy(block),
         })
 
-    for line_idx, line_data in enumerate(raw_text.splitlines(), 1):
-        if len(line_data) > line_cutoff:
-            split_pieces = [line_data[i:i + line_cutoff] for i in range(0, len(line_data), line_cutoff)]
-        else:
-            split_pieces = [line_data]
+    lib = _load_c_lib()
 
-        for piece in split_pieces:
-            for api_name, regex_obj in api_signatures.items():
-                if api_name in PK_TYPES:
+    if lib is not None:
+        # fast path - let C do the heavy regex lifting
+        _ensure_c_init(api_signatures)
+        raw_matches: List[Tuple[str, str]] = []
+
+        def _on_match(api_name_ptr, match_ptr):
+            api_name = api_name_ptr.decode("utf-8", errors="replace")
+            match_text = match_ptr.decode("utf-8", errors="replace")
+            raw_matches.append((api_name, match_text))
+
+        cb = MATCH_CB_TYPE(_on_match)
+        text_bytes = raw_text.encode("utf-8", errors="replace")
+        lib.scan_text_c(text_bytes, cb)
+
+        # C just finds raw matches, python still handles the smart filtering
+        for api_name, secret in raw_matches:
+            if api_name in PK_TYPES:
+                continue
+            if _is_false_positive_match(api_name, secret, filename, "", raw_text):
+                continue
+            effective_name = api_name
+            if api_name == "Supabase Anon/Service Role JWT":
+                sb_type = _sb_jwt_type(secret)
+                if not sb_type:
                     continue
-                for hit in regex_obj.finditer(piece):
-                    normalized_secret = normalize_match(api_name, piece, hit)
-                    if not normalized_secret:
+                effective_name = sb_type
+            line_idx, _line_data = _find_line_for_match(raw_text, secret)
+            # firebase needs line context to decide if its a web config
+            if api_name == "Google API/GCP Key" and _looks_like_firebase_web_config(filename, _line_data, raw_text):
+                continue
+            caught_keys.append({
+                "file": filename,
+                "line": line_idx,
+                "type": effective_name,
+                "secret": secret,
+                "entropy": shannon_entropy(secret),
+            })
+    else:
+        # no C available, do it the old way
+        for line_idx, line_data in enumerate(raw_text.splitlines(), 1):
+            if len(line_data) > line_cutoff:
+                split_pieces = [line_data[i:i + line_cutoff] for i in range(0, len(line_data), line_cutoff)]
+            else:
+                split_pieces = [line_data]
+
+            for piece in split_pieces:
+                for api_name, regex_obj in api_signatures.items():
+                    if api_name in PK_TYPES:
                         continue
-                    if _is_false_positive_match(api_name, normalized_secret, filename, line_data, raw_text):
-                        continue
-                    effective_name = api_name
-                    if api_name == "Supabase Anon/Service Role JWT":
-                        sb_type = _sb_jwt_type(normalized_secret)
-                        if not sb_type:
+                    for hit in regex_obj.finditer(piece):
+                        normalized_secret = normalize_match(api_name, piece, hit)
+                        if not normalized_secret:
                             continue
-                        effective_name = sb_type
-                    caught_keys.append({
-                        "file": filename,
-                        "line": line_idx,
-                        "type": effective_name,
-                        "secret": normalized_secret,
-                        "entropy": shannon_entropy(normalized_secret),
-                    })
+                        if _is_false_positive_match(api_name, normalized_secret, filename, line_data, raw_text):
+                            continue
+                        effective_name = api_name
+                        if api_name == "Supabase Anon/Service Role JWT":
+                            sb_type = _sb_jwt_type(normalized_secret)
+                            if not sb_type:
+                                continue
+                            effective_name = sb_type
+                        caught_keys.append({
+                            "file": filename,
+                            "line": line_idx,
+                            "type": effective_name,
+                            "secret": normalized_secret,
+                            "entropy": shannon_entropy(normalized_secret),
+                        })
     return caught_keys

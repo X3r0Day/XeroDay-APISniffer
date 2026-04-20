@@ -91,7 +91,7 @@ SCANNED_HISTORY = [
 
 SPOOFED_UA = "XeroDay-APISniffer/1.0"
 shutdown_requested = False
-MODES = ["new", "trending", "relevant"]
+MODES = ["new", "trending", "relevant", "search_google", "search_claude", "search_openai", "search_groq", "search_hf", "search_perplexity", "search_replicate", "search_openrouter", "search_xai", "search_cerebras", "search_ai_all"]
 
 
 class DiscoveryRequestError(RuntimeError):
@@ -104,7 +104,7 @@ def parse_args():
     parser.add_argument("--chunk-mins", type=int, help="Time window per query chunk.")
     parser.add_argument("--pages-to-scrape", type=int, help="Maximum GitHub result pages to fetch per chunk.")
     parser.add_argument("--proxy-retry-limit", type=int, help="Maximum proxies to try before giving up.")
-    parser.add_argument("--modes", type=str, help="Comma-separated list of scan modes: new,trending,relevant")
+    parser.add_argument("--modes", type=str, help="Comma-separated scan modes (includes search_ai_all, search_xai, etc)")
     return parser.parse_args()
 
 
@@ -120,11 +120,11 @@ def apply_runtime_overrides(args) -> None:
     if args.proxy_retry_limit is not None:
         PROXY_RETRY_LIMIT = max(1, args.proxy_retry_limit)
     if args.modes is not None:
-        valid_modes = {"new", "trending", "relevant"}
+        valid_modes = {"new", "trending", "relevant", "search_google", "search_claude", "search_openai", "search_groq", "search_hf", "search_perplexity", "search_replicate", "search_openrouter", "search_xai", "search_cerebras", "search_ai_all"}
         parsed_modes = [m.strip().lower() for m in args.modes.split(",")]
         MODES = [m for m in parsed_modes if m in valid_modes]
         if not MODES:
-            MODES = ["new", "trending", "relevant"]
+            MODES = ["new", "trending", "relevant", "search_google", "search_claude"]
 
 
 def grab_proxies(filepath: str = PROXY_FILE) -> List[str]:
@@ -150,6 +150,25 @@ def get_search_query(start_time: datetime, end_time: datetime, page: int = 1, qu
     elif query_type == "relevant":
         return {
             "q": f"API OR LLM OR key OR secret OR security pushed:{start_str}..{end_str}",
+            "per_page": RESULTS_PER_PAGE,
+            "page": page,
+        }
+    elif query_type == "search_google": q = f"AIzaSy author-date:{start_str}..{end_str}"
+    elif query_type == "search_claude": q = f"sk-ant-api author-date:{start_str}..{end_str}"
+    elif query_type == "search_openai": q = f"sk-proj author-date:{start_str}..{end_str}"
+    elif query_type == "search_groq": q = f"gsk_ author-date:{start_str}..{end_str}"
+    elif query_type == "search_hf": q = f"hf_ author-date:{start_str}..{end_str}"
+    elif query_type == "search_perplexity": q = f"pplx- author-date:{start_str}..{end_str}"
+    elif query_type == "search_replicate": q = f"r8_ author-date:{start_str}..{end_str}"
+    elif query_type == "search_openrouter": q = f"sk-or-v1- author-date:{start_str}..{end_str}"
+    elif query_type == "search_xai": q = f"xai- author-date:{start_str}..{end_str}"
+    elif query_type == "search_cerebras": q = f"cs- author-date:{start_str}..{end_str}"
+    
+    if query_type.startswith("search_"):
+        return {
+            "q": q,
+            "sort": "author-date",
+            "order": "desc",
             "per_page": RESULTS_PER_PAGE,
             "page": page,
         }
@@ -345,14 +364,19 @@ def sync_results_to_disk(raw_json: dict, filename: str = TARGET_QUEUE_FILE):
 
     new_finds = 0
     for entry in incoming_data:
-        full_path = entry["full_name"]
+        target_repo = entry.get("repository", entry)
+        full_path = target_repo.get("full_name")
+        if not full_path:
+            continue
+
         if full_path not in blacklist:
+            created_at = target_repo.get("created_at") or entry.get("commit", {}).get("author", {}).get("date")
             current_queue.append(
                 {
                     "name": full_path,
-                    "created_at": entry["created_at"],
-                    "url": entry["html_url"],
-                    "stars": entry.get("stargazers_count", 0),
+                    "created_at": created_at,
+                    "url": target_repo.get("html_url"),
+                    "stars": target_repo.get("stargazers_count", 0),
                 }
             )
             blacklist.add(full_path)
@@ -401,6 +425,11 @@ def main():
                 chunks.append((cursor, chunk_end, "trending"))
             if "relevant" in MODES:
                 chunks.append((cursor, chunk_end, "relevant"))
+            if "search_ai_all" in MODES:
+                ai_types = ["search_google", "search_claude", "search_openai", "search_groq", "search_hf", "search_perplexity", "search_replicate", "search_openrouter", "search_xai", "search_cerebras"]
+                for ai_mode in ai_types:
+                    if ai_mode not in MODES: # Only add if not independently provided
+                        chunks.append((cursor, chunk_end, ai_mode))
             cursor = chunk_end
 
         # We process newest first, so reverse to use as a queue/stack
@@ -427,12 +456,17 @@ def main():
             t_start = start_time.strftime('%H:%M:%S')
             t_end = end_time.strftime('%H:%M:%S')
 
+            if query_type.startswith("search_"):
+                current_api_url = "https://api.github.com/search/commits"
+            else:
+                current_api_url = "https://api.github.com/search/repositories"
+
             print(f"{'='*60}")
             print(f"[Chunk {chunk_idx}] {t_start} -> {t_end} UTC | Type: {query_type}")
 
             api_query = get_search_query(start_time, end_time, page=1, query_type=query_type)
             try:
-                req = make_request(http_session, api_url, api_query, proxies)
+                req = make_request(http_session, current_api_url, api_query, proxies)
             except DiscoveryRequestError as exc:
                 print(f"  [-] Chunk request failed. Skipping chunk. {exc}")
                 continue
@@ -460,6 +494,8 @@ def main():
                 # Don't split if it's less than a second wide, that's just silly
                 if (mid_point - start_time).total_seconds() < 1:
                     print("  [!] Chunk can't be split further. Grabbing what we fetched...")
+                elif query_type.startswith("search_"):
+                    print(f"  [!] Global search reached {repo_count} hits. Ignoring time-chunk slicing. Grabbing what we fetched...")
                 else:
                     print(f"  [↓] The {repo_count} hits the 1k cap! Slicing chunk in half...")
                     # Insert the two halves (newer half first)
@@ -486,7 +522,7 @@ def main():
                 print(f"  -> Fetching Page {page_num}/{pages_needed}...")
 
                 try:
-                    req = make_request(http_session, api_url, api_query, proxies)
+                    req = make_request(http_session, current_api_url, api_query, proxies)
                 except DiscoveryRequestError as exc:
                     print(f"  [-] Page {page_num} request failed. Stopping this chunk. {exc}")
                     break

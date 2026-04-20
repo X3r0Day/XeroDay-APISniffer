@@ -275,6 +275,13 @@ def build_stage_invocation(step: Dict[str, Any]) -> Dict[str, Any]:
             "args": args,
         }
 
+    if action == "verifier":
+        return {
+            "name": "API Verifier",
+            "script": "APIVerifier.py",
+            "args": [],
+        }
+
     return {
         "name": "AI Query Engine",
         "script": "AISearch.py",
