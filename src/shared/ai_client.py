@@ -7,6 +7,29 @@ from rich.prompt import Prompt
 from shared.requests_compat import requests
 
 
+MAX_HISTORY_MESSAGES = 12
+
+
+def build_msgs(sys_txt: str, user_txt: str, history: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, str]]:
+    msgs = [{"role": "system", "content": sys_txt}]
+    if history:
+        msgs.extend(history)
+    msgs.append({"role": "user", "content": user_txt})
+    return msgs
+
+
+def remember_exchange(history: Optional[List[Dict[str, str]]], user_txt: str, assistant_txt: str) -> None:
+    if history is None:
+        return
+    history.extend(
+        [
+            {"role": "user", "content": user_txt},
+            {"role": "assistant", "content": assistant_txt},
+        ]
+    )
+    del history[:-MAX_HISTORY_MESSAGES]
+
+
 def get_key(console=None) -> str:
     key = os.environ.get("GROQ_API_KEY")
     if key:

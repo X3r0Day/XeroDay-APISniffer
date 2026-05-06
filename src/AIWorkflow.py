@@ -51,7 +51,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
-from shared.ai_client import ask_json, get_key
+from shared.ai_client import ask_json, build_msgs, get_key, remember_exchange
 from shared.ai_policy import fill_tpl, load_pol
 from shared.ai_search_runtime import run_single_query
 
@@ -215,7 +215,12 @@ def normalize_route(raw_route: Dict[str, Any], pol: Dict[str, Any]) -> Dict[str,
     return norm
 
 
-def ask_ai_for_route(user_request: str, api_key: str, pol: Dict[str, Any]) -> Dict[str, Any]:
+def ask_ai_for_route(
+    user_request: str,
+    api_key: str,
+    pol: Dict[str, Any],
+    history: Optional[List[Dict[str, str]]] = None,
+) -> Dict[str, Any]:
     acts = list(_acts(pol).keys())
     rep = {
         "__ALLOWED_ACTIONS__": json.dumps(acts),
@@ -226,10 +231,7 @@ def ask_ai_for_route(user_request: str, api_key: str, pol: Dict[str, Any]) -> Di
     if not sys_tpl:
         raise RuntimeError("AI router policy missing.")
     sys_txt = fill_tpl(sys_tpl, rep)
-    msgs = [
-        {"role": "system", "content": sys_txt},
-        {"role": "user", "content": user_request},
-    ]
+    msgs = build_msgs(sys_txt, user_request, history)
     cfg = pol.get("llm", {})
     return ask_json(msgs, api_key, cfg)
 
@@ -339,6 +341,8 @@ def main() -> None:
         return
 
     api_key = None
+    route_history: List[Dict[str, str]] = []
+    query_history: List[Dict[str, str]] = []
 
     while True:
         try:
@@ -355,10 +359,11 @@ def main() -> None:
 
             with console.status("[bold yellow]Routing request...[/]", spinner="dots"):
                 try:
-                    route = normalize_route(ask_ai_for_route(cleaned_input, api_key, POL), POL)
+                    route = normalize_route(ask_ai_for_route(cleaned_input, api_key, POL, route_history), POL)
                 except Exception as error:
                     console.print(f"[bold yellow][!] AI router error: {error}[/]")
                     continue
+            remember_exchange(route_history, cleaned_input, json.dumps(route))
 
             if route.get("reply"):
                 console.print(f"[bold green]AI:[/] {route['reply']}")
@@ -367,7 +372,7 @@ def main() -> None:
                 continue
 
             if route["mode"] == "query":
-                run_single_query(cleaned_input, console=console, api_key=api_key)
+                run_single_query(cleaned_input, console=console, api_key=api_key, history=query_history)
                 continue
 
             render_plan(route)

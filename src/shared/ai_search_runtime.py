@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
-from .ai_client import ask_json, ask_text, get_key
+from .ai_client import ask_json, ask_text, build_msgs, get_key, remember_exchange
 from .ai_policy import fill_tpl, load_pol
 from .api_signatures import API_SIGNATURE_CATEGORIES
 from .category_routing import infer_categories_from_query, is_summary_query, normalize_categories
@@ -159,7 +159,12 @@ def build_fallback_query_plan(user_query: str, pol: Dict[str, Any]) -> Dict[str,
     }
 
 
-def ask_ai_for_query_plan(user_query: str, api_key: str, pol: Dict[str, Any]) -> dict:
+def ask_ai_for_query_plan(
+    user_query: str,
+    api_key: str,
+    pol: Dict[str, Any],
+    history: Optional[List[Dict[str, str]]] = None,
+) -> dict:
     cfg = _q_cfg(pol)
     rep = {
         "__CATEGORIES__": json.dumps(AVAILABLE_CATEGORIES),
@@ -171,10 +176,7 @@ def ask_ai_for_query_plan(user_query: str, api_key: str, pol: Dict[str, Any]) ->
     if not sys_tpl:
         raise RuntimeError("AI query policy missing.")
     sys_txt = fill_tpl(sys_tpl, rep)
-    msgs = [
-        {"role": "system", "content": sys_txt},
-        {"role": "user", "content": user_query},
-    ]
+    msgs = build_msgs(sys_txt, user_query, history)
     cfg_llm = pol.get("llm", {})
     return ask_json(msgs, api_key, cfg_llm)
 
@@ -406,10 +408,17 @@ def display_summary(query_plan: Dict[str, object], matches: List[Dict[str, str]]
     console.print()
 
 
-def process_query(cleaned_input: str, api_key: str, db_data: list, console: Console, pol: Dict[str, Any]) -> None:
+def process_query(
+    cleaned_input: str,
+    api_key: str,
+    db_data: list,
+    console: Console,
+    pol: Dict[str, Any],
+    history: Optional[List[Dict[str, str]]] = None,
+) -> None:
     with console.status("[bold yellow]AI is planning the search...[/]", spinner="dots"):
         try:
-            query_plan = normalize_query_plan(ask_ai_for_query_plan(cleaned_input, api_key, pol), pol)
+            query_plan = normalize_query_plan(ask_ai_for_query_plan(cleaned_input, api_key, pol, history), pol)
         except Exception as error:
             console.print(f"[bold yellow][!] AI planner fallback engaged: {error}[/]")
             query_plan = build_fallback_query_plan(cleaned_input, pol)
@@ -425,6 +434,7 @@ def process_query(cleaned_input: str, api_key: str, db_data: list, console: Cons
 
     understanding = ai_summary or query_plan.get("understanding") or fallback_summary_text(cleaned_input, query_plan, matches)
     console.print(f"[bold green]AI:[/] {understanding}")
+    remember_exchange(history, cleaned_input, json.dumps({"query_plan": query_plan, "reply": understanding}))
 
     if query_plan.get("intent") == "summary":
         display_summary(query_plan, matches, console)
@@ -438,6 +448,7 @@ def run_single_query(
     console: Optional[Console] = None,
     show_header: bool = False,
     api_key: Optional[str] = None,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> None:
     active_console = console or Console()
     cleaned_query = query_text.strip()
@@ -459,7 +470,7 @@ def run_single_query(
     if show_header:
         render_database_overview(active_console, db_data)
 
-    process_query(cleaned_query, resolved_api_key, db_data, active_console, pol)
+    process_query(cleaned_query, resolved_api_key, db_data, active_console, pol, history)
 
 
 def run_interactive_search(console: Optional[Console] = None) -> None:
@@ -477,6 +488,7 @@ def run_interactive_search(console: Optional[Console] = None) -> None:
 
     render_database_overview(active_console, db_data)
     active_console.print("[dim]Type 'exit' or 'quit' to close the terminal.[/]\n")
+    query_history: List[Dict[str, str]] = []
 
     while True:
         try:
@@ -489,7 +501,7 @@ def run_interactive_search(console: Optional[Console] = None) -> None:
                 active_console.print("[bold magenta]Shutting down AI Engine...[/]")
                 break
 
-            process_query(cleaned_input, api_key, db_data, active_console, pol)
+            process_query(cleaned_input, api_key, db_data, active_console, pol, query_history)
         except KeyboardInterrupt:
             active_console.print("\n[bold magenta]Shutting down AI Engine...[/]")
             break
