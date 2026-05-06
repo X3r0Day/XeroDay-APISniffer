@@ -174,7 +174,7 @@ def clone_repo_git(
     update_thread_board(thread_tag, action="[cyan]Cloning (git)...[/]", active_ip="git", dl_bytes=0)
     temp_dir = tempfile.mkdtemp(prefix="x3d_git_")
     repo_url = f"https://github.com/{repo_name}.git"
-    cmd = ["git", "clone", "--depth", "1", "--single-branch", "--branch", branch, repo_url, temp_dir]
+    cmd = ["git", "clone", "--depth", "10", "--single-branch", "--branch", branch, repo_url, temp_dir]
 
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
