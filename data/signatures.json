@@ -12,7 +12,12 @@
     },
     {
       "name": "Anthropic API Key",
-      "pattern": "\\bsk-ant-api03-[a-zA-Z0-9\\-_]{60,100}\\b",
+      "pattern": "\\bsk-ant-api03-[0-9A-Za-z_-]{93}AA\\b",
+      "tags": []
+    },
+    {
+      "name": "Anthropic Admin API Key",
+      "pattern": "\\bsk-ant-admin01-[0-9A-Za-z_-]{93}AA\\b",
       "tags": []
     },
     {
@@ -48,6 +53,26 @@
     {
       "name": "Cerebras Token",
       "pattern": "\\bcs-[a-zA-Z0-9]{32,64}\\b",
+      "tags": []
+    },
+    {
+      "name": "DeepSeek API Key",
+      "pattern": "(?i)deepseek[\\w\\s=:\\\"\\'\\.-]{0,25}\\b(sk-[a-z0-9]{32})\\b",
+      "tags": []
+    },
+    {
+      "name": "GLM API Key",
+      "pattern": "\\b[0-9a-f]{32}\\.[A-Za-z0-9]{16}\\b",
+      "tags": []
+    },
+    {
+      "name": "Kimi API Key",
+      "pattern": "\\bsk-kimi-[a-zA-Z0-9]{64}\\b",
+      "tags": []
+    },
+    {
+      "name": "OpenCode API Key (Zen/Go)",
+      "pattern": "\\bsk-[a-zA-Z0-9]{64}\\b",
       "tags": []
     },
     {
